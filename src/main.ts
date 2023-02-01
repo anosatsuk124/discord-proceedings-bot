@@ -1,6 +1,6 @@
 import { Client, ClientOptions, GatewayIntentBits, Partials } from 'discord.js';
 import { joinVoiceChannel } from '@discordjs/voice';
-import { createWriteStream } from 'fs';
+import { createWriteStream, writeFile } from 'fs';
 import { opus } from 'prism-media';
 import pathToFfmpeg from 'ffmpeg-static';
 import { exec } from 'child_process';
@@ -22,8 +22,6 @@ interface Talk {
     };
 }
 
-const talks: Talk[] = [];
-
 const options: ClientOptions = {
     intents: [
         GatewayIntentBits.Guilds,
@@ -43,6 +41,7 @@ client.on('messageCreate', (msg) => {
     const idDateMap = new Map<string, Date>();
     if (msg.author.bot) return;
     if (msg.content.startsWith('!join')) {
+        const talks: Talk[] = [];
         const channel = msg.member?.voice.channel;
         const connection = joinVoiceChannel({
             channelId: channel?.id!,
@@ -90,6 +89,15 @@ client.on('messageCreate', (msg) => {
                 console.log('end');
             });
         });
+
+        if (msg.content.startsWith('!leave')) {
+            connection.disconnect();
+            writeFile(`${path}/talks.json`, JSON.stringify(talks), (err) => {
+                if (err) {
+                    console.log(err);
+                }
+            });
+        }
     }
 });
 
