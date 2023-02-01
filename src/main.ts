@@ -71,13 +71,13 @@ client.on('messageCreate', (msg) => {
                     })
                 )
                 .pipe(pcmFile);
-            receiver.speaking.on('end', async (endUserId) => {
+            receiver.speaking.once('end', async (endUserId) => {
                 if (userId !== endUserId) return;
                 exec(
                     `${pathToFfmpeg} -y -f s16le -ar 44.1k -ac 2 -i ${fileName}.pcm -f mp3 -ar 44.1k -ac 2 pipe:1 | ffmpeg -i - -ar 16k -ac 1 ${fileName}.wav`,
                     (err) => {
                         if (err) {
-                            return;
+                            console.log(err);
                         }
                     }
                 );
@@ -99,7 +99,7 @@ client.on('messageCreate', (msg) => {
         const talksArray = Array.from(talks);
         writeFile(
             path.join(dirPath, 'talks.json'),
-            JSON.stringify(talks),
+            JSON.stringify(talksArray),
             (err) => {
                 if (err) {
                     console.log(err);
