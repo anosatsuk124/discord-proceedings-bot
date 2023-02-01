@@ -21,7 +21,7 @@ if (!process.argv[1]) {
 const dirPath = process.argv[2];
 
 interface Talk {
-    date: Date;
+    date: string;
     discord_name: string;
     uuid: string;
 }
@@ -62,7 +62,7 @@ client.on('messageCreate', (msg) => {
             const uuid = uuidv4();
             const fileName = path.join(dirPath, uuid);
             const talk: Talk = {
-                date: new Date(),
+                date: new Date().toISOString(),
                 discord_name: client.users.cache.get(userId)?.username!,
                 uuid: uuid,
             };
