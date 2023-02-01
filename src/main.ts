@@ -23,6 +23,7 @@ const dirPath = process.argv[2];
 interface Talk {
     date: string;
     discord_name: string;
+    uuid: string;
 }
 
 const options: ClientOptions = {
@@ -40,8 +41,9 @@ client.on('ready', () => {
     console.log(`${client.user?.tag} is logged in`);
 });
 
-const talks: any = {};
+const talks: Talk[] = [];
 client.on('messageCreate', (msg) => {
+    const idDateMap = new Map<string, Date>();
     if (msg.author.bot) return;
     if (msg.content.startsWith('!join')) {
         const channel = msg.member?.voice.channel;
@@ -62,6 +64,7 @@ client.on('messageCreate', (msg) => {
             const talk: Talk = {
                 date: new Date().toISOString(),
                 discord_name: client.users.cache.get(userId)?.username!,
+                uuid: uuid,
             };
             const pcmFile = createWriteStream(`${fileName}.pcm`);
             stream
@@ -83,7 +86,7 @@ client.on('messageCreate', (msg) => {
                         }
                     }
                 );
-                talks[uuid] = talk;
+                talks.push(talk);
                 console.log('end');
             });
         });
