@@ -41,7 +41,7 @@ client.on('ready', () => {
     console.log(`${client.user?.tag} is logged in`);
 });
 
-const talks: Talk[] = [];
+const talks: Set<Talk> = new Set();
 client.on('messageCreate', (msg) => {
     const idDateMap = new Map<string, Date>();
     if (msg.author.bot) return;
@@ -61,11 +61,6 @@ client.on('messageCreate', (msg) => {
             const stream = receiver.subscribe(userId);
             const uuid = uuidv4();
             const fileName = path.join(dirPath, uuid);
-            const talk: Talk = {
-                date: new Date().toISOString(),
-                discord_name: client.users.cache.get(userId)?.username!,
-                uuid: uuid,
-            };
             const pcmFile = createWriteStream(`${fileName}.pcm`);
             stream
                 .pipe(
@@ -86,7 +81,12 @@ client.on('messageCreate', (msg) => {
                         }
                     }
                 );
-                talks.push(talk);
+                const talk: Talk = {
+                    date: new Date().toISOString(),
+                    discord_name: client.users.cache.get(userId)?.username!,
+                    uuid: uuid,
+                };
+                talks.add(talk);
                 console.log('end');
             });
         });
@@ -96,6 +96,7 @@ client.on('messageCreate', (msg) => {
         const connection = getVoiceConnection(msg.guildId!);
         if (!connection) return;
         connection.disconnect();
+        const talksArray = Array.from(talks);
         writeFile(
             path.join(dirPath, 'talks.json'),
             JSON.stringify(talks),
@@ -103,6 +104,7 @@ client.on('messageCreate', (msg) => {
                 if (err) {
                     console.log(err);
                 }
+                Array;
             }
         );
     }
