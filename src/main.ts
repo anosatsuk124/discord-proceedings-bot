@@ -87,7 +87,6 @@ client.on('messageCreate', (msg) => {
                     }
                 );
                 talks.push(talk);
-                console.log(talks);
                 console.log('end');
             });
         });
