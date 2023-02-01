@@ -79,7 +79,7 @@ client.on('messageCreate', (msg) => {
             receiver.speaking.on('end', async (endUserId) => {
                 if (userId !== endUserId) return;
                 exec(
-                    `${pathToFfmpeg} -y -f s16le -ar 44.1k -ac 2 -i "${fileName}.pcm" "${fileName}.mp3"`,
+                    `${pathToFfmpeg} -y -f s16le -ar 44.1k -ac 2 -i "${fileName}.pcm" "${fileName}.wav"`,
                     (err) => {
                         if (err) {
                             console.log(err);
