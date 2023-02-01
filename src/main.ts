@@ -22,7 +22,7 @@ const dirPath = process.argv[2];
 
 interface Talk {
     data: Date;
-    discord_id: string;
+    discord_name: string;
     uuid: string;
 }
 
@@ -63,7 +63,7 @@ client.on('messageCreate', (msg) => {
             const fileName = path.join(dirPath, uuid);
             const talk: Talk = {
                 data: new Date(),
-                discord_id: userId,
+                discord_name: client.users.cache.get(userId)?.username!,
                 uuid: uuid,
             };
             const pcmFile = createWriteStream(`${fileName}.pcm`);
