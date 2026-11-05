@@ -299,6 +299,8 @@ export class ProceedingsBot {
                     ),
                 ]);
             } catch {
+                // 待っているあいだに録音が止められ、別の録音が始まっていることがある。
+                if (!isCurrent()) return;
                 await this.#finish(guildId, 'disconnected').catch((error) =>
                     this.#logger.error(
                         `failed to finish the session in guild ${guildId}`,
