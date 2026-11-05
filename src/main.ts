@@ -1,4 +1,4 @@
-import { Client, Events, GatewayIntentBits } from 'discord.js';
+import { Client, Events, GatewayIntentBits, type Guild } from 'discord.js';
 import { ProceedingsBot } from './bot.ts';
 import { commands } from './commands.ts';
 import { ConfigError, loadConfig, type Config } from './config.ts';
@@ -34,6 +34,23 @@ const poster = discordPoster(client);
 const bot = new ProceedingsBot({ client, config, poster });
 const stopTasks: Array<() => void> = [];
 
+/**
+ * コマンドはサーバーごとに登録する。グローバルの登録と違い、すぐに一覧に反映される。
+ */
+async function registerCommands(guild: Guild): Promise<void> {
+    try {
+        await guild.commands.set(commands);
+        console.info(
+            `registered /${commands.map((c) => c.name).join(', /')} in guild ${guild.id}`
+        );
+    } catch (error) {
+        console.error(
+            `failed to register slash commands in guild ${guild.id}`,
+            error
+        );
+    }
+}
+
 client.once(Events.ClientReady, async (ready) => {
     console.info(`logged in as ${ready.user.tag}; data dir: ${config.dataDir}`);
     stopTasks.push(
@@ -51,14 +68,15 @@ client.once(Events.ClientReady, async (ready) => {
         )
     );
     try {
-        await ready.application.commands.set(commands);
-        console.info(
-            `registered commands: ${commands.map((c) => `/${c.name}`).join(', ')}`
-        );
+        // 以前の版はグローバルに登録していた(/join, /leave)。残っていると一覧に出続けるので消す。
+        await ready.application.commands.set([]);
     } catch (error) {
-        console.error('failed to register slash commands', error);
+        console.error('failed to clear global slash commands', error);
     }
+    await Promise.all(ready.guilds.cache.map(registerCommands));
 });
+// 新しいサーバーに招待されたら、そのサーバーにもコマンドを登録する。
+client.on(Events.GuildCreate, (guild) => void registerCommands(guild));
 client.on(Events.InteractionCreate, (interaction) => {
     void bot.handleInteraction(interaction);
 });

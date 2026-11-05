@@ -34,7 +34,7 @@ export interface SessionManifest {
     readonly sessionId: string;
     readonly guildId: string;
     readonly channelId: string;
-    /** /join を実行したテキストチャンネル。議事録をここに投稿する。 */
+    /** /gijiroku start を実行したテキストチャンネル。議事録をここに投稿する。 */
     readonly textChannelId: string | null;
     readonly startedAt: Date;
     readonly endedAt: Date;

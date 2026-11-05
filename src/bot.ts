@@ -13,6 +13,7 @@ import {
     type VoiceConnection,
 } from '@discordjs/voice';
 import { AutoLeaveTimers } from './auto-leave.ts';
+import { COMMAND_NAME, START_SUBCOMMAND, STOP_SUBCOMMAND } from './commands.ts';
 import type { Config } from './config.ts';
 import type { Poster } from './delivery.ts';
 import type { SessionManifest } from './manifest.ts';
@@ -35,7 +36,7 @@ export interface ProceedingsBotOptions {
 }
 
 /**
- * /join と /leave を受けて、サーバーごとに 1 つの録音セッションを管理する。
+ * /gijiroku start と /gijiroku stop を受けて、サーバーごとに 1 つの録音セッションを管理する。
  * ボイスチャンネルから人がいなくなったら、少し待ってから自動で録音を終える。
  */
 export class ProceedingsBot {
@@ -44,7 +45,7 @@ export class ProceedingsBot {
     readonly #poster: Poster;
     readonly #logger: Logger;
     readonly #sessions = new Map<string, ActiveSession>();
-    /** /join の処理中のサーバー。二重に接続しないために使う。 */
+    /** /gijiroku start の処理中のサーバー。二重に接続しないために使う。 */
     readonly #joining = new Set<string>();
     readonly #autoLeave: AutoLeaveTimers;
 
@@ -60,19 +61,24 @@ export class ProceedingsBot {
     }
 
     async handleInteraction(interaction: Interaction): Promise<void> {
-        if (!interaction.isChatInputCommand()) return;
+        if (
+            !interaction.isChatInputCommand() ||
+            interaction.commandName !== COMMAND_NAME
+        ) {
+            return;
+        }
         try {
-            switch (interaction.commandName) {
-                case 'join':
+            switch (interaction.options.getSubcommand()) {
+                case START_SUBCOMMAND:
                     await this.#join(interaction);
                     break;
-                case 'leave':
+                case STOP_SUBCOMMAND:
                     await this.#leave(interaction);
                     break;
             }
         } catch (error) {
             this.#logger.error(
-                `/${interaction.commandName} failed in guild ${interaction.guildId}`,
+                `/${interaction.commandName} ${interaction.options.getSubcommand(false)} failed in guild ${interaction.guildId}`,
                 error
             );
             await this.#replyError(interaction).catch(() => {});
@@ -107,7 +113,7 @@ export class ProceedingsBot {
         if (channel === null) {
             await interaction.reply({
                 content:
-                    'ボイスチャンネルに参加してから `/join` を実行してください。',
+                    'ボイスチャンネルに参加してから `/gijiroku start` を実行してください。',
                 flags: MessageFlags.Ephemeral,
             });
             return;
@@ -170,7 +176,7 @@ export class ProceedingsBot {
                 `[${recording.id}] recording started in guild ${guildId} channel ${channel.id}`
             );
             await interaction.editReply(
-                `🔴 ${channel} の録音を始めました。終わるときは \`/leave\` を実行してください` +
+                `🔴 ${channel} の録音を始めました。終わるときは \`/gijiroku stop\` を実行してください` +
                     (this.#config.autoLeaveDelayMs > 0
                         ? '(全員が抜けると自動で終わります)。'
                         : '。') +
@@ -193,7 +199,7 @@ export class ProceedingsBot {
             return;
         }
         await interaction.deferReply();
-        const manifest = await this.#finish(guildId, '/leave');
+        const manifest = await this.#finish(guildId, '/gijiroku stop');
         await interaction.editReply(
             manifest
                 ? `⏹️ 録音を終えました(発言 ${manifest.utterances.length} 件)。` +

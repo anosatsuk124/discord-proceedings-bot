@@ -8,7 +8,7 @@ import {
 import type { Logger } from './recording-session.ts';
 
 /**
- * recognizer が書いた議事録(proceedings.csv)を、/join を実行したテキストチャンネルに投稿する。
+ * recognizer が書いた議事録(proceedings.csv)を、/gijiroku start を実行したテキストチャンネルに投稿する。
  *
  * セッションのディレクトリを定期的に見て、議事録(または文字起こしの失敗の記録)があり、
  * まだ投稿していないものを投稿する。投稿したら delivery.json を書くので、Bot が再起動しても
