@@ -8,26 +8,42 @@ import {
 import type { Logger } from './recording-session.ts';
 
 /**
- * recognizer が書いた議事録(proceedings.csv)を、/gijiroku start を実行したテキストチャンネルに投稿する。
+ * recognizer が書いた議事録(HTML・Markdown・CSV)を、/gijiroku start を実行したテキストチャンネルに投稿する。
  *
  * セッションのディレクトリを定期的に見て、議事録(または文字起こしの失敗の記録)があり、
  * まだ投稿していないものを投稿する。投稿したら delivery.json を書くので、Bot が再起動しても
  * 二重には投稿しない。
  */
 
-/** recognizer が書く議事録。 */
+/** recognizer が書く議事録の CSV。recognizer はこれを最後に書くので、これがあれば文字起こしは終わっている。 */
 export const PROCEEDINGS_FILE = 'proceedings.csv';
+/** recognizer が CSV と一緒に書く、人が読むための議事録(古い recognizer は書かない)。 */
+export const PROCEEDINGS_HTML_FILE = 'proceedings.html';
+export const PROCEEDINGS_MARKDOWN_FILE = 'proceedings.md';
+
+/** 添付するファイル。Discord ではこの順に並ぶ。 */
+const PROCEEDINGS_FILES = [
+    PROCEEDINGS_HTML_FILE,
+    PROCEEDINGS_MARKDOWN_FILE,
+    PROCEEDINGS_FILE,
+] as const;
 /** recognizer が文字起こしに失敗したときに書く。 */
 export const TRANSCRIPTION_ERROR_FILE = 'transcription.error';
 /** 投稿の結果。これがあるセッションは投稿しない。 */
 export const DELIVERY_FILE = 'delivery.json';
 
-/** Bot が添付できるファイルの大きさの上限(ブーストしていないサーバーで 10MB)。 */
+/** Bot が添付できるファイル 1 つの大きさの上限(ブーストしていないサーバーで 10MB)。 */
 export const MAX_ATTACHMENT_BYTES = 10_000_000;
+
+export interface Attachment {
+    readonly path: string;
+    /** Discord に表示するファイル名。 */
+    readonly name: string;
+}
 
 export interface OutgoingMessage {
     readonly content: string;
-    readonly file?: { readonly path: string; readonly name: string };
+    readonly files: readonly Attachment[];
 }
 
 /** チャンネルにメッセージを送るもの。テストでは偽物に差し替える。 */
@@ -43,11 +59,16 @@ export class PermanentDeliveryError extends Error {
     override name = 'PermanentDeliveryError';
 }
 
+export interface ProceedingsFile {
+    readonly path: string;
+    readonly bytes: number;
+}
+
 export type Outcome =
     | {
           readonly kind: 'ready';
-          readonly csvPath: string;
-          readonly csvBytes: number;
+          /** できている議事録のファイル(PROCEEDINGS_FILES の順)。 */
+          readonly files: readonly ProceedingsFile[];
       }
     | { readonly kind: 'failed' };
 
@@ -68,12 +89,15 @@ export async function findDeliverable(
         if (!files.has(MANIFEST_FILE) || files.has(DELIVERY_FILE)) continue;
         let outcome: Outcome;
         if (files.has(PROCEEDINGS_FILE)) {
-            const csvPath = path.join(directory, PROCEEDINGS_FILE);
-            outcome = {
-                kind: 'ready',
-                csvPath,
-                csvBytes: (await stat(csvPath)).size,
-            };
+            const ready: ProceedingsFile[] = [];
+            for (const name of PROCEEDINGS_FILES.filter((n) => files.has(n))) {
+                const filePath = path.join(directory, name);
+                ready.push({
+                    path: filePath,
+                    bytes: (await stat(filePath)).size,
+                });
+            }
+            outcome = { kind: 'ready', files: ready };
         } else if (files.has(TRANSCRIPTION_ERROR_FILE)) {
             outcome = { kind: 'failed' };
         } else {
@@ -129,25 +153,32 @@ export function composeMessage(deliverable: Deliverable): OutgoingMessage {
     if (outcome.kind === 'failed') {
         return {
             content: `⚠️ ${where} の録音(${when})は文字起こしに失敗しました。recognizer のログを確認してください。`,
+            files: [],
         };
     }
     if (manifest.utteranceCount === 0) {
         return {
             content: `📝 ${where} の録音(${when})には発言がありませんでした。`,
+            files: [],
         };
     }
-    const summary = `📝 ${where} の議事録です(${when}、発言 ${manifest.utteranceCount} 件)。`;
-    if (outcome.csvBytes > MAX_ATTACHMENT_BYTES) {
-        return {
-            content: `${summary}\nファイルが大きすぎて添付できないので、サーバーの ${path.basename(deliverable.directory)}/${PROCEEDINGS_FILE} を見てください。`,
-        };
+    let content = `📝 ${where} の議事録です(${when}、発言 ${manifest.utteranceCount} 件)。`;
+    const tooLarge = outcome.files.filter(
+        (file) => file.bytes > MAX_ATTACHMENT_BYTES
+    );
+    if (tooLarge.length > 0) {
+        const names = tooLarge.map((file) => path.basename(file.path));
+        content += `\n${names.join('、')} は大きすぎて添付できないので、サーバーの ${path.basename(deliverable.directory)}/ にあるものを見てください。`;
     }
     return {
-        content: summary,
-        file: {
-            path: outcome.csvPath,
-            name: `proceedings-${manifest.sessionId}.csv`,
-        },
+        content,
+        files: outcome.files
+            .filter((file) => file.bytes <= MAX_ATTACHMENT_BYTES)
+            .map((file) => ({
+                path: file.path,
+                // 例: proceedings-20261105T144905Z-4aaa7159.html
+                name: `proceedings-${manifest.sessionId}${path.extname(file.path)}`,
+            })),
     };
 }
 

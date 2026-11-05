@@ -34,6 +34,10 @@ export interface SessionManifest {
     readonly sessionId: string;
     readonly guildId: string;
     readonly channelId: string;
+    /** 録音時点のサーバー名。議事録の見出しに使う。 */
+    readonly guildName: string | null;
+    /** 録音時点のボイスチャンネル名。議事録の見出しに使う。 */
+    readonly channelName: string | null;
     /** /gijiroku start を実行したテキストチャンネル。議事録をここに投稿する。 */
     readonly textChannelId: string | null;
     readonly startedAt: Date;
@@ -67,6 +71,8 @@ export function serializeManifest(manifest: SessionManifest): string {
         session_id: manifest.sessionId,
         guild_id: manifest.guildId,
         channel_id: manifest.channelId,
+        guild_name: manifest.guildName,
+        channel_name: manifest.channelName,
         text_channel_id: manifest.textChannelId,
         started_at: manifest.startedAt.toISOString(),
         ended_at: manifest.endedAt.toISOString(),

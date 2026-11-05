@@ -1,5 +1,9 @@
-# bot と recognizer をまとめて動かす。recognizer のリポジトリは、このリポジトリの隣に clone しておく
-# (別の場所なら RECOGNIZER_DIR で指定する)。設定は .env に書く(.env.example を参照)。
+# bot と recognizer をまとめて動かす。設定は .env に書く(.env.example を参照)。
+#
+# デプロイも更新も `git pull && docker compose up -d` だけで済むよう、どちらのサービスも
+# up のたびにビルドする(pull_policy: build。変更がなければキャッシュで済む)。
+# recognizer は GitHub のリポジトリの master から直接ビルドする。手元の clone を使うときは
+# RECOGNIZER_CONTEXT にそのディレクトリを指定する。
 name: discord-proceedings
 
 # 録音と議事録の置き場所。無いときに Docker が root 所有で作ってしまわないよう、作らずにエラーにする。
@@ -27,6 +31,7 @@ services:
         <<: *hardening
         build: .
         image: discord-proceedings-bot:latest
+        pull_policy: build
         environment:
             DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN を .env に書いてください}
             DATA_DIR: /data
@@ -42,8 +47,9 @@ services:
 
     recognizer:
         <<: *hardening
-        build: ${RECOGNIZER_DIR:-../discord-proceedings-bot-recognizer}
+        build: ${RECOGNIZER_CONTEXT:-https://github.com/anosatsuk124/discord-proceedings-bot-recognizer.git#master}
         image: discord-proceedings-recognizer:latest
+        pull_policy: build
         command: ['watch', '/data']
         environment:
             WHISPER_MODEL: ${WHISPER_MODEL:-kotoba-tech/kotoba-whisper-v2.0-faster}

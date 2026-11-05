@@ -17,8 +17,9 @@ Discord のボイスチャンネルを録音して、議事録の材料を作る
 
 - ボイスチャンネルから全員(Bot を除く)が抜けると、1 分後に自動で録音を終えて退出します。
   そのあいだに誰かが戻れば続けます。
-- 文字起こしが終わると、`/gijiroku start` を実行したテキストチャンネルに議事録の CSV を投稿します。
-- 録音(音声ファイル)は 30 日たつと消します。議事録の CSV は残します。
+- 文字起こしが終わると、`/gijiroku start` を実行したテキストチャンネルに議事録を投稿します。
+  同じ内容を、ブラウザで開く HTML、Markdown、CSV の 3 つで添付します。
+- 録音(音声ファイル)は 30 日たつと消します。議事録は残します。
 
 ## 出力
 
@@ -26,7 +27,9 @@ Discord のボイスチャンネルを録音して、議事録の材料を作る
 <DATA_DIR>/sessions/<guild_id>/<session_id>/
 ├── manifest.json        # 録音を終えたときに最後に書く(recognizer はこれを見て処理を始める)
 ├── <utterance_id>.ogg   # 発言ごとの音声(Discord から届いた Opus をそのまま Ogg に包んだもの)
-├── proceedings.csv      # recognizer が書く議事録(speaker, date, talk)
+├── proceedings.html     # recognizer が書く議事録(1 ファイルで完結するページ)
+├── proceedings.md       # 〃 Markdown
+├── proceedings.csv      # 〃 CSV(speaker, date, talk)。3 つのうち最後に書く
 └── delivery.json        # 議事録を Discord に投稿した記録(これがあるセッションは投稿しない)
 ```
 
@@ -52,19 +55,30 @@ Discord のボイスチャンネルを録音して、議事録の材料を作る
 
 ## デプロイ(Docker Compose)
 
-bot と recognizer を同じディレクトリの下に clone して、bot 側の `compose.yaml` から両方を動かします。
+このリポジトリの `compose.yaml` で、bot と recognizer を両方動かします。recognizer は GitHub の
+リポジトリ(master)から直接ビルドするので、clone するのはこのリポジトリだけで足ります。
 
 ```sh
 git clone https://github.com/anosatsuk124/discord-proceedings-bot.git
-git clone https://github.com/anosatsuk124/discord-proceedings-bot-recognizer.git
 cd discord-proceedings-bot
 cp .env.example .env    # DISCORD_TOKEN などを書く
 chmod 600 .env
 mkdir -p data           # uid 1000 のユーザーが書けること
-docker compose up -d --build
+docker compose up -d
 docker compose logs -f
 ```
 
+更新するときは、pull して up するだけです。どちらのサービスも up のたびにビルドし直し
+(`pull_policy: build`)、変わったものだけを作り直します。recognizer も、その時点の master を取ってきます。
+
+```sh
+git pull
+docker compose up -d
+```
+
+初回のビルドでは recognizer が CTranslate2 と oneDNN を C++ からビルドするので時間がかかります
+(優先度を最低にしてビルドするので、ほかのサービスの邪魔はしにくくなっています)。2 回目からは、
+recognizer の依存(`Cargo.lock`)が変わらないかぎりキャッシュで済みます。
 初回の起動時に recognizer が文字起こしのモデル(約 1.5GB)を `models` ボリュームに取ってきます。
 文字起こしの設定(モデル、スレッド数など)は `.env.example` と recognizer の README を参照してください。
 

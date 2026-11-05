@@ -27,14 +27,10 @@ export function discordPoster(client: Client): Poster {
                 }
                 const sent = await channel.send({
                     content: message.content,
-                    files: message.file
-                        ? [
-                              {
-                                  attachment: message.file.path,
-                                  name: message.file.name,
-                              },
-                          ]
-                        : [],
+                    files: message.files.map((file) => ({
+                        attachment: file.path,
+                        name: file.name,
+                    })),
                     // 本文にはチャンネルへのリンクしか入れないが、念のため誰にも通知しない。
                     allowedMentions: { parse: [] },
                 });

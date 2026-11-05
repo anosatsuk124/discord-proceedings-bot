@@ -42,6 +42,9 @@ export interface RecordingSessionOptions {
     readonly dataDir: string;
     readonly guildId: string;
     readonly channelId: string;
+    /** サーバー名とボイスチャンネル名。議事録の見出しに使う。 */
+    readonly guildName?: string | null;
+    readonly channelName?: string | null;
     /** 議事録を投稿するテキストチャンネル。 */
     readonly textChannelId?: string | null;
     readonly silenceDurationMs: number;
@@ -64,6 +67,8 @@ export class RecordingSession {
     readonly directory: string;
     readonly guildId: string;
     readonly channelId: string;
+    readonly guildName: string | null;
+    readonly channelName: string | null;
     readonly textChannelId: string | null;
     readonly startedAt: Date;
 
@@ -108,6 +113,8 @@ export class RecordingSession {
         this.directory = directory;
         this.guildId = options.guildId;
         this.channelId = options.channelId;
+        this.guildName = options.guildName ?? null;
+        this.channelName = options.channelName ?? null;
         this.textChannelId = options.textChannelId ?? null;
         this.startedAt = startedAt;
         this.#receiver = options.receiver;
@@ -258,6 +265,8 @@ export class RecordingSession {
             sessionId: this.id,
             guildId: this.guildId,
             channelId: this.channelId,
+            guildName: this.guildName,
+            channelName: this.channelName,
             textChannelId: this.textChannelId,
             startedAt: this.startedAt,
             endedAt: this.#now(),

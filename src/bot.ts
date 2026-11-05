@@ -171,6 +171,8 @@ export class ProceedingsBot {
                     dataDir: this.#config.dataDir,
                     guildId,
                     channelId: channel.id,
+                    guildName: guild.name,
+                    channelName: channel.name,
                     textChannelId: interaction.channelId,
                     silenceDurationMs: this.#config.silenceDurationMs,
                     shouldRecord: (userId) =>
@@ -315,6 +317,7 @@ export class ProceedingsBot {
                 content:
                     `⏹️ <#${manifest.channelId}> から全員が抜けたので録音を終えました` +
                     `(発言 ${manifest.utterances.length} 件)。議事録ができたらここに投稿します。`,
+                files: [],
             });
         } catch (error) {
             this.#logger.error(

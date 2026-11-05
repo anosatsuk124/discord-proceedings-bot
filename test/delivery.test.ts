@@ -8,6 +8,8 @@ import {
     MAX_ATTACHMENT_BYTES,
     PermanentDeliveryError,
     PROCEEDINGS_FILE,
+    PROCEEDINGS_HTML_FILE,
+    PROCEEDINGS_MARKDOWN_FILE,
     TRANSCRIPTION_ERROR_FILE,
     composeMessage,
     deliverPending,
@@ -52,6 +54,8 @@ describe('議事録の投稿', () => {
                 sessionId: id,
                 guildId: 'g',
                 channelId: 'voice-1',
+                guildName: '開発部',
+                channelName: '定例',
                 textChannelId:
                     options.textChannelId === undefined
                         ? 'text-1'
@@ -77,6 +81,14 @@ describe('議事録の投稿', () => {
     it('議事録ができたセッションだけを、まだ投稿していなければ投稿する', async () => {
         const ready = await session('20261105T010000Z-00000001');
         await writeFile(
+            path.join(ready, PROCEEDINGS_HTML_FILE),
+            '<!doctype html>'
+        );
+        await writeFile(
+            path.join(ready, PROCEEDINGS_MARKDOWN_FILE),
+            '# 議事録'
+        );
+        await writeFile(
             path.join(ready, PROCEEDINGS_FILE),
             'speaker,date,talk\n'
         );
@@ -98,10 +110,20 @@ describe('議事録の投稿', () => {
         const [post] = poster.posts;
         assert.equal(post?.channelId, 'text-1');
         assert.match(post!.message.content, /<#voice-1>.*発言 2 件/);
-        assert.deepEqual(post!.message.file, {
-            path: path.join(ready, PROCEEDINGS_FILE),
-            name: 'proceedings-20261105T010000Z-00000001.csv',
-        });
+        assert.deepEqual(post!.message.files, [
+            {
+                path: path.join(ready, PROCEEDINGS_HTML_FILE),
+                name: 'proceedings-20261105T010000Z-00000001.html',
+            },
+            {
+                path: path.join(ready, PROCEEDINGS_MARKDOWN_FILE),
+                name: 'proceedings-20261105T010000Z-00000001.md',
+            },
+            {
+                path: path.join(ready, PROCEEDINGS_FILE),
+                name: 'proceedings-20261105T010000Z-00000001.csv',
+            },
+        ]);
 
         const record = JSON.parse(
             await readFile(path.join(ready, DELIVERY_FILE), 'utf8')
@@ -123,7 +145,21 @@ describe('議事録の投稿', () => {
         const poster = new FakePoster();
         await deliverPending({ dataDir, poster, logger: silentLogger });
         assert.match(poster.posts[0]!.message.content, /失敗/);
-        assert.equal(poster.posts[0]!.message.file, undefined);
+        assert.deepEqual(poster.posts[0]!.message.files, []);
+    });
+
+    it('HTML と Markdown を書かない古い recognizer なら CSV だけを添付する', async () => {
+        const ready = await session('20261105T010000Z-00000001');
+        await writeFile(
+            path.join(ready, PROCEEDINGS_FILE),
+            'speaker,date,talk\n'
+        );
+        const poster = new FakePoster();
+        await deliverPending({ dataDir, poster, logger: silentLogger });
+        assert.deepEqual(
+            poster.posts[0]!.message.files.map((file) => file.name),
+            ['proceedings-20261105T010000Z-00000001.csv']
+        );
     });
 
     it('一時的な失敗は次の回にやり直し、やり直しても無駄な失敗は記録してあきらめる', async () => {
@@ -162,22 +198,33 @@ describe('議事録の投稿', () => {
         };
         const empty = composeMessage({
             ...base,
-            outcome: { kind: 'ready', csvPath: '/x.csv', csvBytes: 20 },
+            outcome: {
+                kind: 'ready',
+                files: [{ path: '/x/proceedings.csv', bytes: 20 }],
+            },
         });
         assert.match(empty.content, /発言がありませんでした/);
-        assert.equal(empty.file, undefined);
+        assert.deepEqual(empty.files, []);
 
         const huge = composeMessage({
             ...base,
             manifest: { ...base.manifest, utteranceCount: 1 },
             outcome: {
                 kind: 'ready',
-                csvPath: '/x.csv',
-                csvBytes: MAX_ATTACHMENT_BYTES + 1,
+                files: [
+                    {
+                        path: '/x/proceedings.html',
+                        bytes: MAX_ATTACHMENT_BYTES + 1,
+                    },
+                    { path: '/x/proceedings.csv', bytes: 20 },
+                ],
             },
         });
-        assert.match(huge.content, /大きすぎて/);
-        assert.equal(huge.file, undefined);
+        assert.match(huge.content, /proceedings\.html は大きすぎて/);
+        assert.deepEqual(
+            huge.files.map((file) => file.name),
+            ['proceedings-s.csv']
+        );
     });
 
     it('sessions ディレクトリが無ければ何もしない', async () => {
