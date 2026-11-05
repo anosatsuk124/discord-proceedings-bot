@@ -18,6 +18,7 @@ import type { Config } from './config.ts';
 import type { Poster } from './delivery.ts';
 import type { SessionManifest } from './manifest.ts';
 import { RecordingSession, type Logger } from './recording-session.ts';
+import { watchVoiceTraffic } from './voice-debug.ts';
 
 const READY_TIMEOUT_MS = 20_000;
 const RECONNECT_TIMEOUT_MS = 5_000;
@@ -148,10 +149,14 @@ export class ProceedingsBot {
                 debug: this.#config.voiceDebug,
             });
             if (this.#config.voiceDebug) {
+                const log = (message: string): void =>
+                    this.#logger.info(`[voice ${guildId}] ${message}`);
                 connection.on('debug', (message) =>
-                    this.#logger.info(
-                        `[voice ${guildId}] ${redactVoiceSecrets(message)}`
-                    )
+                    log(redactVoiceSecrets(message))
+                );
+                connection.once(
+                    VoiceConnectionStatus.Destroyed,
+                    watchVoiceTraffic(connection, log)
                 );
             }
             let recording: RecordingSession;

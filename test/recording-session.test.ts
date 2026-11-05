@@ -18,8 +18,13 @@ import {
 import { opusAudioPackets } from './ogg.ts';
 
 /** @discordjs/voice の VoiceReceiver の代わり。本物の AudioReceiveStream を返す。 */
+class FakeSpeakingMap extends EventEmitter {
+    /** いま話しているユーザー(本物の SpeakingMap と同じく、話し始めた時刻を持つ)。 */
+    readonly users = new Map<string, number>();
+}
+
 class FakeReceiver implements Receiver {
-    readonly speaking = new EventEmitter();
+    readonly speaking = new FakeSpeakingMap();
     readonly streams = new Map<string, AudioReceiveStream>();
 
     subscribe(
@@ -177,6 +182,46 @@ describe('RecordingSession', () => {
         receiver.speak('alice', packets.slice(0, 3));
         const manifest = await session.stop();
         assert.equal(manifest.utterances[0]?.speaker, 'alice');
+    });
+
+    it('録音を始める前から話し続けている人も録音する', async () => {
+        // 話し始めの start は録音を始める前に来ていて、もう来ない。
+        receiver.speaking.users.set('alice', Date.now());
+        const session = await start({ silenceDurationMs: 300 });
+        const stream = receiver.streams.get('alice');
+        assert.ok(stream, 'alice is not subscribed');
+        for (const packet of packets.slice(0, 5)) stream.push(packet);
+        const manifest = await session.stop();
+
+        assert.equal(manifest.utterances.length, 1);
+        assert.equal(manifest.utterances[0]?.userId, 'alice');
+    });
+
+    it('無音で発言が閉じたときにまた話していれば、続けて録音する', async () => {
+        const session = await start();
+        const first = receiver.speak('alice', packets.slice(0, 3));
+        // 閉じる直前に話し始めた。start は閉じる前に来たので、録音中として無視されている。
+        receiver.speaking.users.set('alice', Date.now());
+        await once(first, 'close');
+
+        const second = receiver.streams.get('alice');
+        assert.ok(second, 'alice is not subscribed again');
+        assert.notEqual(second, first);
+        for (const packet of packets.slice(3, 6)) second.push(packet);
+        const manifest = await session.stop();
+        assert.equal(manifest.utterances.length, 2);
+    });
+
+    it('受信ストリームがエラーで閉じたときは、続けて録音しない', async () => {
+        const session = await start({ silenceDurationMs: 300 });
+        const stream = receiver.speak('alice', packets.slice(0, 3));
+        receiver.speaking.users.set('alice', Date.now());
+        const closed = new Promise((resolve) => stream.once('close', resolve));
+        stream.destroy(new Error('failed to decrypt'));
+        await closed;
+
+        assert.equal(receiver.streams.size, 0);
+        await session.stop();
     });
 
     it('manifest の発言は開始時刻順に並ぶ', async () => {

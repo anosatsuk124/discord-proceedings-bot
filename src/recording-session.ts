@@ -26,6 +26,8 @@ export type Logger = Pick<Console, 'info' | 'warn' | 'error'>;
  */
 export interface Receiver {
     readonly speaking: {
+        /** いま話しているユーザー。 */
+        readonly users: ReadonlyMap<string, unknown>;
         on(event: 'start', listener: (userId: string) => void): unknown;
         off(event: 'start', listener: (userId: string) => void): unknown;
     };
@@ -117,6 +119,11 @@ export class RecordingSession {
         this.#now = options.now ?? (() => new Date());
         this.#stopTimeoutMs = options.stopTimeoutMs ?? 10_000;
         this.#receiver.speaking.on('start', this.#onSpeakingStart);
+        // start は話し始めた瞬間に 1 度しか来ない。録音を始める前から話し続けている人
+        // (接続の準備中に話し始めた人など)は、途切れるまで start が来ないのでここで拾う。
+        for (const userId of this.#receiver.speaking.users.keys()) {
+            this.#onSpeakingStart(userId);
+        }
     }
 
     get utteranceCount(): number {
@@ -157,7 +164,9 @@ export class RecordingSession {
 
         // 受信ストリームがエラーで閉じても(DAVE の復号失敗など)、それまでに受け取った
         // 音声は残したいので、pipeline でつながずに close を見て Ogg を閉じる。
+        let failed = false;
         opus.on('error', (error) => {
+            failed = true;
             this.#logger.warn(
                 `[${this.id}] receive stream for user ${userId} failed; keeping audio received so far`,
                 error
@@ -166,6 +175,11 @@ export class RecordingSession {
         opus.once('close', () => {
             this.#activeStreams.delete(userId);
             ogg.end();
+            // 無音で閉じる直前にまた話し始めていた場合、その start は録音中として無視して
+            // いるので、まだ話していれば続けて録る。エラーで閉じたときは繰り返さない。
+            if (!failed && this.#receiver.speaking.users.has(userId)) {
+                this.#onSpeakingStart(userId);
+            }
         });
         opus.pipe(ogg, { end: false });
 
