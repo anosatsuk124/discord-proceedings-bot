@@ -48,6 +48,12 @@ export class ProceedingsBot {
     readonly #sessions = new Map<string, ActiveSession>();
     /** /gijiroku start の処理中のサーバー。二重に接続しないために使う。 */
     readonly #joining = new Set<string>();
+    /**
+     * 録音を止めて接続を切っている途中のサーバー。終わるまで次の録音を始めない。
+     * 古い接続が残っているうちに joinVoiceChannel を呼ぶと、その接続が使い回され、
+     * 後から古い録音の後片付けで切られてしまうため。
+     */
+    readonly #finishing = new Map<string, Promise<unknown>>();
     readonly #autoLeave: AutoLeaveTimers;
 
     constructor(options: ProceedingsBotOptions) {
@@ -94,11 +100,12 @@ export class ProceedingsBot {
     /** 全サーバーの録音を止めて manifest を書く。プロセス終了前に呼ぶ。 */
     async shutdown(): Promise<void> {
         this.#autoLeave.cancelAll();
-        await Promise.allSettled(
-            [...this.#sessions.keys()].map((guildId) =>
+        await Promise.allSettled([
+            ...[...this.#sessions.keys()].map((guildId) =>
                 this.#finish(guildId, 'shutdown')
-            )
-        );
+            ),
+            ...this.#finishing.values(),
+        ]);
     }
 
     async #join(interaction: ChatInputCommandInteraction): Promise<void> {
@@ -120,11 +127,17 @@ export class ProceedingsBot {
             return;
         }
         const active = this.#sessions.get(guildId);
-        if (active !== undefined || this.#joining.has(guildId)) {
+        if (
+            active !== undefined ||
+            this.#joining.has(guildId) ||
+            this.#finishing.has(guildId)
+        ) {
             await interaction.reply({
                 content: active
                     ? `すでに <#${active.recording.channelId}> で録音しています。`
-                    : 'いま録音の準備をしています。',
+                    : this.#joining.has(guildId)
+                      ? 'いま録音の準備をしています。'
+                      : '前の録音を終えているところです。数秒たってからもう一度実行してください。',
                 flags: MessageFlags.Ephemeral,
             });
             return;
@@ -224,7 +237,8 @@ export class ProceedingsBot {
     }
 
     /**
-     * 録音を止めて接続を切る。同じサーバーで二度呼ばれても一度しか処理しない。
+     * 録音を止めて接続を切る。同じサーバーで二度呼ばれても一度しか処理しない
+     * (二度目以降は undefined を返す)。
      */
     async #finish(
         guildId: string,
@@ -234,6 +248,19 @@ export class ProceedingsBot {
         if (session === undefined) return undefined;
         this.#sessions.delete(guildId);
         this.#autoLeave.cancel(guildId);
+        const finishing = this.#stopAndDisconnect(session, reason);
+        this.#finishing.set(guildId, finishing);
+        try {
+            return await finishing;
+        } finally {
+            this.#finishing.delete(guildId);
+        }
+    }
+
+    async #stopAndDisconnect(
+        session: ActiveSession,
+        reason: string
+    ): Promise<SessionManifest> {
         try {
             // 接続を先に切ると受信中のストリームがエラーで閉じるので、録音を止めてから切る。
             const manifest = await session.recording.stop();
