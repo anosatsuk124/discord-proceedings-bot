@@ -17,17 +17,19 @@ FROM base AS build
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
-RUN pnpm run build
+RUN pnpm run build && mkdir data-dir
 
-FROM node:${NODE_VERSION}-trixie-slim
+# 実行用はシェルやパッケージマネージャーを含まない distroless にして、攻撃に使える部分を減らす。
+FROM gcr.io/distroless/nodejs${NODE_VERSION}-debian13
 ENV NODE_ENV=production \
     DATA_DIR=/data
 WORKDIR /app
 COPY package.json ./
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-# node ユーザー(uid 1000)で動かす。録音を書く /data はこのユーザーが書ける必要がある。
-RUN mkdir -p /data && chown node:node /data
-USER node
+# 録音を書く /data。recognizer と同じ uid 1000 で動かす(ホスト側の data/ もこの uid が書ける必要がある)。
+COPY --from=build --chown=1000:1000 /app/data-dir /data
+USER 1000:1000
 VOLUME ["/data"]
-CMD ["node", "--enable-source-maps", "dist/main.js"]
+# ENTRYPOINT は node
+CMD ["--enable-source-maps", "dist/main.js"]
