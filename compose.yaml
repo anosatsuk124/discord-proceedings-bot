@@ -31,6 +31,8 @@ services:
             DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN を .env に書いてください}
             DATA_DIR: /data
             SILENCE_DURATION_MS: ${SILENCE_DURATION_MS:-1000}
+            AUTO_LEAVE_DELAY_SECONDS: ${AUTO_LEAVE_DELAY_SECONDS:-60}
+            RECORDING_RETENTION_DAYS: ${RECORDING_RETENTION_DAYS:-30}
         volumes:
             - *data-volume
         # 終了時に録音中の発言を閉じて manifest.json を書く時間

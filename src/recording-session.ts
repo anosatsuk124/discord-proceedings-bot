@@ -40,6 +40,8 @@ export interface RecordingSessionOptions {
     readonly dataDir: string;
     readonly guildId: string;
     readonly channelId: string;
+    /** 議事録を投稿するテキストチャンネル。 */
+    readonly textChannelId?: string | null;
     readonly silenceDurationMs: number;
     /** 録音する相手か(Bot を除くなど)。 */
     readonly shouldRecord?: (userId: string) => boolean;
@@ -60,6 +62,7 @@ export class RecordingSession {
     readonly directory: string;
     readonly guildId: string;
     readonly channelId: string;
+    readonly textChannelId: string | null;
     readonly startedAt: Date;
 
     readonly #receiver: Receiver;
@@ -103,6 +106,7 @@ export class RecordingSession {
         this.directory = directory;
         this.guildId = options.guildId;
         this.channelId = options.channelId;
+        this.textChannelId = options.textChannelId ?? null;
         this.startedAt = startedAt;
         this.#receiver = options.receiver;
         this.#silenceDurationMs = options.silenceDurationMs;
@@ -235,6 +239,7 @@ export class RecordingSession {
             sessionId: this.id,
             guildId: this.guildId,
             channelId: this.channelId,
+            textChannelId: this.textChannelId,
             startedAt: this.startedAt,
             endedAt: this.#now(),
             utterances: [...this.#utterances].sort(

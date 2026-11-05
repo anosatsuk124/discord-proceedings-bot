@@ -15,6 +15,8 @@ describe('loadConfig', () => {
         assert.equal(config.discordToken, 'token');
         assert.equal(config.dataDir, path.resolve('data'));
         assert.equal(config.silenceDurationMs, 1000);
+        assert.equal(config.autoLeaveDelayMs, 60_000);
+        assert.equal(config.retentionDays, 30);
     });
 
     it('環境変数で上書きできる', () => {
@@ -22,9 +24,28 @@ describe('loadConfig', () => {
             DISCORD_TOKEN: 'token',
             DATA_DIR: '/data',
             SILENCE_DURATION_MS: '1500',
+            AUTO_LEAVE_DELAY_SECONDS: '0',
+            RECORDING_RETENTION_DAYS: '7',
         });
         assert.equal(config.dataDir, '/data');
         assert.equal(config.silenceDurationMs, 1500);
+        assert.equal(config.autoLeaveDelayMs, 0);
+        assert.equal(config.retentionDays, 7);
+    });
+
+    it('自動退出と保存期間は 0 以上の整数だけ受け付ける', () => {
+        for (const name of [
+            'AUTO_LEAVE_DELAY_SECONDS',
+            'RECORDING_RETENTION_DAYS',
+        ]) {
+            for (const value of ['-1', '1.5', 'abc']) {
+                assert.throws(
+                    () => loadConfig({ DISCORD_TOKEN: 'token', [name]: value }),
+                    ConfigError,
+                    `${name}=${value}`
+                );
+            }
+        }
     });
 
     it('SILENCE_DURATION_MS は正の整数だけ受け付ける', () => {
@@ -56,6 +77,7 @@ describe('manifest', () => {
                 sessionId: 's',
                 guildId: 'g',
                 channelId: 'c',
+                textChannelId: 't',
                 startedAt: new Date('2026-11-05T00:00:00Z'),
                 endedAt: new Date('2026-11-05T01:00:00Z'),
                 utterances: [
@@ -75,6 +97,7 @@ describe('manifest', () => {
             session_id: 's',
             guild_id: 'g',
             channel_id: 'c',
+            text_channel_id: 't',
             started_at: '2026-11-05T00:00:00.000Z',
             ended_at: '2026-11-05T01:00:00.000Z',
             utterances: [

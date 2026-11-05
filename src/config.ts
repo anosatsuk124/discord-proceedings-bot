@@ -7,6 +7,10 @@ export interface Config {
     readonly dataDir: string;
     /** 発言の区切りとみなす無音の長さ(ミリ秒)。 */
     readonly silenceDurationMs: number;
+    /** ボイスチャンネルから人がいなくなってから退出するまでの時間(ミリ秒)。0 なら自動では退出しない。 */
+    readonly autoLeaveDelayMs: number;
+    /** 録音(音声ファイル)を残しておく日数。0 なら消さない。 */
+    readonly retentionDays: number;
 }
 
 export class ConfigError extends Error {
@@ -21,24 +25,26 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     return {
         discordToken,
         dataDir: path.resolve(env['DATA_DIR']?.trim() || 'data'),
-        silenceDurationMs: parsePositiveInteger(
-            env,
-            'SILENCE_DURATION_MS',
-            1000
-        ),
+        silenceDurationMs: parseInteger(env, 'SILENCE_DURATION_MS', 1000, 1),
+        autoLeaveDelayMs:
+            parseInteger(env, 'AUTO_LEAVE_DELAY_SECONDS', 60, 0) * 1000,
+        retentionDays: parseInteger(env, 'RECORDING_RETENTION_DAYS', 30, 0),
     };
 }
 
-function parsePositiveInteger(
+function parseInteger(
     env: NodeJS.ProcessEnv,
     name: string,
-    fallback: number
+    fallback: number,
+    minimum: number
 ): number {
     const raw = env[name]?.trim();
     if (!raw) return fallback;
     const value = Number(raw);
-    if (!Number.isSafeInteger(value) || value <= 0) {
-        throw new ConfigError(`${name} must be a positive integer: ${raw}`);
+    if (!Number.isSafeInteger(value) || value < minimum) {
+        throw new ConfigError(
+            `${name} must be an integer >= ${minimum}: ${raw}`
+        );
     }
     return value;
 }

@@ -4,6 +4,7 @@ import {
     type Client,
     type Guild,
     type Interaction,
+    type VoiceState,
 } from 'discord.js';
 import {
     VoiceConnectionStatus,
@@ -11,7 +12,9 @@ import {
     joinVoiceChannel,
     type VoiceConnection,
 } from '@discordjs/voice';
+import { AutoLeaveTimers } from './auto-leave.ts';
 import type { Config } from './config.ts';
+import type { Poster } from './delivery.ts';
 import type { SessionManifest } from './manifest.ts';
 import { RecordingSession, type Logger } from './recording-session.ts';
 
@@ -26,22 +29,34 @@ interface ActiveSession {
 export interface ProceedingsBotOptions {
     readonly client: Client;
     readonly config: Config;
+    /** 自動で退出したことを知らせるのに使う。 */
+    readonly poster: Poster;
     readonly logger?: Logger;
 }
 
-/** /join と /leave を受けて、サーバーごとに 1 つの録音セッションを管理する。 */
+/**
+ * /join と /leave を受けて、サーバーごとに 1 つの録音セッションを管理する。
+ * ボイスチャンネルから人がいなくなったら、少し待ってから自動で録音を終える。
+ */
 export class ProceedingsBot {
     readonly #client: Client;
     readonly #config: Config;
+    readonly #poster: Poster;
     readonly #logger: Logger;
     readonly #sessions = new Map<string, ActiveSession>();
     /** /join の処理中のサーバー。二重に接続しないために使う。 */
     readonly #joining = new Set<string>();
+    readonly #autoLeave: AutoLeaveTimers;
 
     constructor(options: ProceedingsBotOptions) {
         this.#client = options.client;
         this.#config = options.config;
+        this.#poster = options.poster;
         this.#logger = options.logger ?? console;
+        this.#autoLeave = new AutoLeaveTimers(
+            options.config.autoLeaveDelayMs,
+            (guildId) => void this.#leaveEmptyChannel(guildId)
+        );
     }
 
     async handleInteraction(interaction: Interaction): Promise<void> {
@@ -64,8 +79,14 @@ export class ProceedingsBot {
         }
     }
 
+    /** 誰かがボイスチャンネルに出入りしたら呼ぶ。 */
+    handleVoiceStateUpdate(_oldState: VoiceState, newState: VoiceState): void {
+        this.#checkChannelOccupancy(newState.guild);
+    }
+
     /** 全サーバーの録音を止めて manifest を書く。プロセス終了前に呼ぶ。 */
     async shutdown(): Promise<void> {
+        this.#autoLeave.cancelAll();
         await Promise.allSettled(
             [...this.#sessions.keys()].map((guildId) =>
                 this.#finish(guildId, 'shutdown')
@@ -131,6 +152,7 @@ export class ProceedingsBot {
                     dataDir: this.#config.dataDir,
                     guildId,
                     channelId: channel.id,
+                    textChannelId: interaction.channelId,
                     silenceDurationMs: this.#config.silenceDurationMs,
                     shouldRecord: (userId) =>
                         this.#client.users.cache.get(userId)?.bot !== true,
@@ -148,8 +170,14 @@ export class ProceedingsBot {
                 `[${recording.id}] recording started in guild ${guildId} channel ${channel.id}`
             );
             await interaction.editReply(
-                `🔴 ${channel} の録音を始めました。終わるときは \`/leave\` を実行してください。`
+                `🔴 ${channel} の録音を始めました。終わるときは \`/leave\` を実行してください` +
+                    (this.#config.autoLeaveDelayMs > 0
+                        ? '(全員が抜けると自動で終わります)。'
+                        : '。') +
+                    '議事録ができたらこのチャンネルに投稿します。'
             );
+            // 準備のあいだに全員が抜けていたら、ここで自動退出のタイマーを始める。
+            this.#checkChannelOccupancy(guild);
         } finally {
             this.#joining.delete(guildId);
         }
@@ -168,7 +196,8 @@ export class ProceedingsBot {
         const manifest = await this.#finish(guildId, '/leave');
         await interaction.editReply(
             manifest
-                ? `⏹️ 録音を終えました(発言 ${manifest.utterances.length} 件)。文字起こしは順に行われます。`
+                ? `⏹️ 録音を終えました(発言 ${manifest.utterances.length} 件)。` +
+                      `議事録ができたら <#${manifest.textChannelId ?? interaction.channelId}> に投稿します。`
                 : '録音していません。'
         );
     }
@@ -183,6 +212,7 @@ export class ProceedingsBot {
         const session = this.#sessions.get(guildId);
         if (session === undefined) return undefined;
         this.#sessions.delete(guildId);
+        this.#autoLeave.cancel(guildId);
         try {
             // 接続を先に切ると受信中のストリームがエラーで閉じるので、録音を止めてから切る。
             const manifest = await session.recording.stop();
@@ -244,6 +274,35 @@ export class ProceedingsBot {
                 error
             );
         });
+    }
+
+    /** Bot がいるボイスチャンネルに人(Bot を除く)が残っているかを自動退出のタイマーに伝える。 */
+    #checkChannelOccupancy(guild: Guild): void {
+        if (!this.#sessions.has(guild.id)) return;
+        const channel = guild.members.me?.voice.channel;
+        if (!channel) return; // 切断中。再接続できなければ #watchConnection が終わらせる。
+        const humansPresent = channel.members.some(
+            (member) => !member.user.bot
+        );
+        this.#autoLeave.update(guild.id, humansPresent);
+    }
+
+    /** 全員が抜けたまま待ち時間が過ぎたので、録音を終えてテキストチャンネルに知らせる。 */
+    async #leaveEmptyChannel(guildId: string): Promise<void> {
+        try {
+            const manifest = await this.#finish(guildId, 'everyone left');
+            if (manifest?.textChannelId == null) return;
+            await this.#poster.post(manifest.textChannelId, {
+                content:
+                    `⏹️ <#${manifest.channelId}> から全員が抜けたので録音を終えました` +
+                    `(発言 ${manifest.utterances.length} 件)。議事録ができたらここに投稿します。`,
+            });
+        } catch (error) {
+            this.#logger.error(
+                `failed to leave the empty channel in guild ${guildId}`,
+                error
+            );
+        }
     }
 
     async #displayName(guild: Guild, userId: string): Promise<string> {

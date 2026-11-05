@@ -86,6 +86,7 @@ describe('RecordingSession', () => {
 
     it('発言ごとに Ogg Opus を書き、manifest に記録する', async () => {
         const session = await start({
+            textChannelId: 'text-1',
             resolveSpeaker: async (userId) => `name-of-${userId}`,
         });
         assert.match(
@@ -103,6 +104,7 @@ describe('RecordingSession', () => {
         assert.equal(json.session_id, session.id);
         assert.equal(json.guild_id, 'guild-1');
         assert.equal(json.channel_id, 'channel-1');
+        assert.equal(json.text_channel_id, 'text-1');
         const [utterance] = json.utterances;
         assert.equal(utterance.user_id, 'alice');
         assert.equal(utterance.speaker, 'name-of-alice');
