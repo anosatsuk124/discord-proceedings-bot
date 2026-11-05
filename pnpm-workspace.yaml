@@ -1,0 +1,6 @@
+# サプライチェーン攻撃対策:
+# - 公開から 3 日(4320 分)経っていない版は入れない
+# - 以前の版より信頼性(provenance など)が下がった版は入れない
+# - ビルドスクリプトはどの依存にも許可しない(allowBuilds に何も書かない)
+minimumReleaseAge: 4320
+trustPolicy: no-downgrade
