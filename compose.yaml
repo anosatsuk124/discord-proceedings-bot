@@ -1,0 +1,75 @@
+# bot と recognizer をまとめて動かす。設定は .env に書く(.env.example を参照)。
+#
+# デプロイも更新も `git pull && docker compose up -d` だけで済むよう、どちらのサービスも
+# up のたびにビルドする(pull_policy: build。変更がなければキャッシュで済む)。
+# recognizer は GitHub のリポジトリの master から直接ビルドする。手元の clone を使うときは
+# RECOGNIZER_CONTEXT にそのディレクトリを指定する。
+name: discord-proceedings
+
+# 録音と議事録の置き場所。無いときに Docker が root 所有で作ってしまわないよう、作らずにエラーにする。
+x-data-volume: &data-volume
+    type: bind
+    source: ${DATA_DIR:-./data}
+    target: /data
+    bind:
+        create_host_path: false
+
+x-hardening: &hardening
+    restart: unless-stopped
+    # シグナルを子プロセスに渡し、ゾンビを回収する
+    init: true
+    read_only: true
+    tmpfs:
+        - /tmp
+    cap_drop:
+        - ALL
+    security_opt:
+        - no-new-privileges:true
+
+services:
+    bot:
+        <<: *hardening
+        build: .
+        image: discord-proceedings-bot:latest
+        pull_policy: build
+        environment:
+            DISCORD_TOKEN: ${DISCORD_TOKEN:?DISCORD_TOKEN を .env に書いてください}
+            DATA_DIR: /data
+            SILENCE_DURATION_MS: ${SILENCE_DURATION_MS:-1000}
+            AUTO_LEAVE_DELAY_SECONDS: ${AUTO_LEAVE_DELAY_SECONDS:-60}
+            RECORDING_RETENTION_DAYS: ${RECORDING_RETENTION_DAYS:-30}
+            # 音声接続(DAVE を含む)のデバッグログ。録音がうまくいかないときに true にする
+            VOICE_DEBUG: ${VOICE_DEBUG:-false}
+        volumes:
+            - *data-volume
+        # 終了時に録音中の発言を閉じて manifest.json を書く時間
+        stop_grace_period: 30s
+
+    recognizer:
+        <<: *hardening
+        build: ${RECOGNIZER_CONTEXT:-https://github.com/anosatsuk124/discord-proceedings-bot-recognizer.git#master}
+        image: discord-proceedings-recognizer:latest
+        pull_policy: build
+        command: ['watch', '/data']
+        environment:
+            WHISPER_MODEL: ${WHISPER_MODEL:-kotoba-tech/kotoba-whisper-v2.0-faster}
+            # モデルを変えたら、ここも変えるか空にする(空なら最新を使う)
+            WHISPER_MODEL_REVISION: ${WHISPER_MODEL_REVISION-f44edd35eaeb2274e85ac7b31fb2c6f59ff1c4bc}
+            WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+            WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+            # Ryzen 9 7900(12 コア)向け。物理コア数に合わせる。
+            WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-12}
+            WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ja}
+            WHISPER_BEAM_SIZE: ${WHISPER_BEAM_SIZE:-5}
+            WHISPER_CHUNK_LENGTH: ${WHISPER_CHUNK_LENGTH:-15}
+            WHISPER_CONDITION_ON_PREVIOUS_TEXT: ${WHISPER_CONDITION_ON_PREVIOUS_TEXT:-false}
+            PROCEEDINGS_TIMEZONE: ${PROCEEDINGS_TIMEZONE:-Asia/Tokyo}
+            HF_HOME: /models
+            RUST_LOG: ${RUST_LOG:-info}
+        volumes:
+            - *data-volume
+            - models:/models
+
+volumes:
+    # ダウンロードしたモデルのキャッシュ
+    models:

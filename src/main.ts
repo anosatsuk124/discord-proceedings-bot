@@ -1,113 +1,106 @@
-import { Client, ClientOptions, GatewayIntentBits, Partials } from 'discord.js';
-import {
-    VoiceConnection,
-    getVoiceConnection,
-    joinVoiceChannel,
-} from '@discordjs/voice';
-import { createWriteStream, writeFile } from 'fs';
-import { opus } from 'prism-media';
-import pathToFfmpeg from 'ffmpeg-static';
-import { exec } from 'child_process';
-import { v4 as uuidv4 } from 'uuid';
-import { config } from 'dotenv';
-import path from 'path';
-config();
+import { Client, Events, GatewayIntentBits, type Guild } from 'discord.js';
+import { ProceedingsBot } from './bot.ts';
+import { commands } from './commands.ts';
+import { ConfigError, loadConfig, type Config } from './config.ts';
+import { deliverPending } from './delivery.ts';
+import { discordPoster } from './discord-poster.ts';
+import { runPeriodically } from './periodic.ts';
+import { purgeExpiredRecordings } from './retention.ts';
 
-if (!process.argv[1]) {
-    console.log('Please provide a directory path to store the files');
-    process.exit(1);
-}
+/** 議事録ができたかを見に行く間隔 */
+const DELIVERY_INTERVAL_MS = 15_000;
+/** 保存期間を過ぎた録音を消す間隔 */
+const RETENTION_INTERVAL_MS = 60 * 60 * 1000;
 
-const dirPath = process.argv[2];
-
-interface Talk {
-    date: string;
-    discord_name: string;
-    uuid: string;
-}
-
-const options: ClientOptions = {
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.GuildVoiceStates,
-    ],
-    partials: [Partials.GuildMember, Partials.Message],
-};
-const client = new Client(options);
-
-client.on('ready', () => {
-    console.log(`${client.user?.tag} is logged in`);
-});
-
-const talks: Set<Talk> = new Set();
-client.on('messageCreate', (msg) => {
-    const idDateMap = new Map<string, Date>();
-    if (msg.author.bot) return;
-    if (msg.content.startsWith('!join')) {
-        const channel = msg.member?.voice.channel;
-        const connection = joinVoiceChannel({
-            channelId: channel?.id!,
-            guildId: channel?.guildId!,
-            adapterCreator: channel?.guild.voiceAdapterCreator!,
-            selfDeaf: false,
-        });
-        connection.dispatchAudio();
-        const receiver = connection.receiver;
-
-        receiver.speaking.on('start', async (userId) => {
-            console.log('start');
-            const stream = receiver.subscribe(userId);
-            const uuid = uuidv4();
-            const fileName = path.join(dirPath, uuid);
-            const pcmFile = createWriteStream(`${fileName}.pcm`);
-            stream
-                .pipe(
-                    new opus.Decoder({
-                        rate: 48000,
-                        channels: 2,
-                        frameSize: 960,
-                    })
-                )
-                .pipe(pcmFile);
-            receiver.speaking.once('end', async (endUserId) => {
-                if (userId !== endUserId) return;
-                exec(
-                    `${pathToFfmpeg} -y -f s16le -ar 44.1k -ac 2 -i ${fileName}.pcm -f mp3 -ar 44.1k -ac 2 pipe:1 | ffmpeg -i - -ar 16k -ac 1 ${fileName}.wav`,
-                    (err) => {
-                        if (err) {
-                            console.log(err);
-                        }
-                    }
-                );
-                const talk: Talk = {
-                    date: new Date().toISOString(),
-                    discord_name: client.users.cache.get(userId)?.username!,
-                    uuid: uuid,
-                };
-                talks.add(talk);
-                console.log('end');
-            });
-        });
+function loadConfigOrExit(): Config {
+    try {
+        return loadConfig();
+    } catch (error) {
+        if (error instanceof ConfigError) {
+            console.error(`configuration error: ${error.message}`);
+            process.exit(1);
+        }
+        throw error;
     }
+}
 
-    if (msg.content.startsWith('!leave')) {
-        const connection = getVoiceConnection(msg.guildId!);
-        if (!connection) return;
-        connection.disconnect();
-        const talksArray = Array.from(talks);
-        writeFile(
-            path.join(dirPath, 'talks.json'),
-            JSON.stringify(talksArray),
-            (err) => {
-                if (err) {
-                    console.log(err);
-                }
-                Array;
-            }
+const config = loadConfigOrExit();
+
+// スラッシュコマンドとボイスチャンネルの状態だけを使うので、特権インテントは要らない。
+const client = new Client({
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
+});
+const poster = discordPoster(client);
+const bot = new ProceedingsBot({ client, config, poster });
+const stopTasks: Array<() => void> = [];
+
+/**
+ * コマンドはサーバーごとに登録する。グローバルの登録と違い、すぐに一覧に反映される。
+ */
+async function registerCommands(guild: Guild): Promise<void> {
+    try {
+        await guild.commands.set(commands);
+        console.info(
+            `registered /${commands.map((c) => c.name).join(', /')} in guild ${guild.id}`
+        );
+    } catch (error) {
+        console.error(
+            `failed to register slash commands in guild ${guild.id}`,
+            error
         );
     }
+}
+
+client.once(Events.ClientReady, async (ready) => {
+    console.info(`logged in as ${ready.user.tag}; data dir: ${config.dataDir}`);
+    stopTasks.push(
+        runPeriodically('posting proceedings', DELIVERY_INTERVAL_MS, () =>
+            deliverPending({ dataDir: config.dataDir, poster })
+        ),
+        runPeriodically(
+            'deleting expired recordings',
+            RETENTION_INTERVAL_MS,
+            () =>
+                purgeExpiredRecordings({
+                    dataDir: config.dataDir,
+                    retentionDays: config.retentionDays,
+                })
+        )
+    );
+    try {
+        // 以前の版はグローバルに登録していた(/join, /leave)。残っていると一覧に出続けるので消す。
+        await ready.application.commands.set([]);
+    } catch (error) {
+        console.error('failed to clear global slash commands', error);
+    }
+    await Promise.all(ready.guilds.cache.map(registerCommands));
+});
+// 新しいサーバーに招待されたら、そのサーバーにもコマンドを登録する。
+client.on(Events.GuildCreate, (guild) => void registerCommands(guild));
+client.on(Events.InteractionCreate, (interaction) => {
+    void bot.handleInteraction(interaction);
+});
+client.on(Events.VoiceStateUpdate, (oldState, newState) => {
+    bot.handleVoiceStateUpdate(oldState, newState);
+});
+client.on(Events.Error, (error) => {
+    console.error('discord client error', error);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('unhandled rejection', reason);
 });
 
-client.login(process.env.TOKEN);
+let shuttingDown = false;
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.info(`received ${signal}; finishing active recordings`);
+    for (const stop of stopTasks) stop();
+    await bot.shutdown();
+    await client.destroy();
+    process.exit(0);
+}
+process.once('SIGINT', (signal) => void shutdown(signal));
+process.once('SIGTERM', (signal) => void shutdown(signal));
+
+await client.login(config.discordToken);

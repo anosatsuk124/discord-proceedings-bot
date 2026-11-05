@@ -1,1 +1,8 @@
-/node_modules
+.git
+.env
+.env.*
+node_modules
+dist
+data
+test
+*.log
