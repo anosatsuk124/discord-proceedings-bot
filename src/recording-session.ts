@@ -175,6 +175,11 @@ export class RecordingSession {
         )
             .then(async () => {
                 if (ogg.packetCount === 0) {
+                    // 話し始めた通知は来たのに音声が 1 つも届かなかった。DAVE の復号に失敗している
+                    // ことが多い(@discordjs/voice は復号できなかったパケットを黙って捨てる)。
+                    this.#logger.warn(
+                        `[${this.id}] discarded an utterance from user ${userId}: no audio packets arrived (set VOICE_DEBUG=true to see why)`
+                    );
                     await rm(filePath, { force: true });
                     return;
                 }

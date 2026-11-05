@@ -11,6 +11,8 @@ export interface Config {
     readonly autoLeaveDelayMs: number;
     /** 録音(音声ファイル)を残しておく日数。0 なら消さない。 */
     readonly retentionDays: number;
+    /** 音声接続(DAVE を含む)のデバッグログを出すか。 */
+    readonly voiceDebug: boolean;
 }
 
 export class ConfigError extends Error {
@@ -29,7 +31,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
         autoLeaveDelayMs:
             parseInteger(env, 'AUTO_LEAVE_DELAY_SECONDS', 60, 0) * 1000,
         retentionDays: parseInteger(env, 'RECORDING_RETENTION_DAYS', 30, 0),
+        voiceDebug: parseBoolean(env, 'VOICE_DEBUG', false),
     };
+}
+
+function parseBoolean(
+    env: NodeJS.ProcessEnv,
+    name: string,
+    fallback: boolean
+): boolean {
+    const raw = env[name]?.trim().toLowerCase();
+    if (!raw) return fallback;
+    if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+    if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+    throw new ConfigError(`${name} must be true or false: ${raw}`);
 }
 
 function parseInteger(

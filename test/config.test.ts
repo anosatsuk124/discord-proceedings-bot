@@ -113,3 +113,17 @@ describe('manifest', () => {
         });
     });
 });
+
+describe('VOICE_DEBUG', () => {
+    it('既定はオフで、true/false を受け付ける', () => {
+        assert.equal(loadConfig({ DISCORD_TOKEN: 't' }).voiceDebug, false);
+        assert.equal(
+            loadConfig({ DISCORD_TOKEN: 't', VOICE_DEBUG: 'true' }).voiceDebug,
+            true
+        );
+        assert.throws(
+            () => loadConfig({ DISCORD_TOKEN: 't', VOICE_DEBUG: 'maybe' }),
+            ConfigError
+        );
+    });
+});

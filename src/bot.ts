@@ -145,7 +145,15 @@ export class ProceedingsBot {
                 adapterCreator: guild.voiceAdapterCreator,
                 selfDeaf: false,
                 selfMute: true,
+                debug: this.#config.voiceDebug,
             });
+            if (this.#config.voiceDebug) {
+                connection.on('debug', (message) =>
+                    this.#logger.info(
+                        `[voice ${guildId}] ${redactVoiceSecrets(message)}`
+                    )
+                );
+            }
             let recording: RecordingSession;
             try {
                 await entersState(
@@ -330,4 +338,11 @@ export class ProceedingsBot {
             });
         }
     }
+}
+
+/** 音声接続のデバッグログから、トークンと暗号鍵を伏せる。 */
+export function redactVoiceSecrets(message: string): string {
+    return message
+        .replace(/("token"\s*:\s*)"[^"]*"/g, '$1"<redacted>"')
+        .replace(/("secret_key"\s*:\s*)\[[^\]]*\]/g, '$1"<redacted>"');
 }
