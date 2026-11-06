@@ -63,6 +63,8 @@ services:
             WHISPER_BEAM_SIZE: ${WHISPER_BEAM_SIZE:-5}
             WHISPER_CHUNK_LENGTH: ${WHISPER_CHUNK_LENGTH:-15}
             WHISPER_CONDITION_ON_PREVIOUS_TEXT: ${WHISPER_CONDITION_ON_PREVIOUS_TEXT:-false}
+            # 無音を VAD で取り除いてから文字起こしする(無音から言っていない文字列が出るのを防ぐ)
+            WHISPER_VAD_FILTER: ${WHISPER_VAD_FILTER:-true}
             PROCEEDINGS_TIMEZONE: ${PROCEEDINGS_TIMEZONE:-Asia/Tokyo}
             HF_HOME: /models
             RUST_LOG: ${RUST_LOG:-info}
