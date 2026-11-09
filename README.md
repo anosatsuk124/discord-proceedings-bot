@@ -25,7 +25,7 @@ Discord のボイスチャンネルを録音して、議事録の材料を作る
 
 ## 議事録ページ
 
-文字起こしの CSV から、全体のまとめ、章立て、関連資料、文脈を踏まえて校正した全文をまとめた 1 ファイルの HTML を作り、
+文字起こしの CSV から、全体のまとめ、章立て、議論マップ、関連資料、文脈を踏まえて校正した全文をまとめた 1 ファイルの HTML を作り、
 [simple-static-pager](https://github.com/anosatsuk124/simple-static-pager) に公開して URL をチャンネルに投稿します。
 ページは本文を HTML に直接埋め込んだ静的なものなので、JS や CSS が無効でも全文を読めます。既定では無効です(`REPORT_AGENT=off`)。
 
@@ -55,7 +55,7 @@ LLM は JSON を書く部分だけを担当し、それ以外(CSV の整形、�
 入口ページの更新)はすべてプログラムが行います。手順と HTML のテンプレートは `skills/proceedings-report/` の SKILL にあります。
 
 ```text
-bot ──ジョブ──▶ report-worker ──▶ CSV 整形 → LLM: 章立て → LLM: 関連資料の調査 → LLM: 校正 → 検証 → HTML
+bot ──ジョブ──▶ report-worker ──▶ CSV 整形 → LLM: 章立て → LLM: 関連資料の調査 → LLM: 校正 → LLM: 議論マップ → 検証 → HTML
   ◀──report.html──┘
   ▼
 GitHub の html ブランチに commit → Actions の完了を待つ → artifact から URL を取得 → 投稿 → 入口ページを更新
@@ -80,7 +80,7 @@ CSV を指定して HTML だけを作ることもできます: `pnpm report --cs
 - **サンドボックス**: CLI は [sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime)(`srt`)で包みます。
   書き込めるのはタスクのディレクトリだけ、接続できるのは許可したドメインだけです。このためにこのサービスだけ、
   user namespace を許す seccomp プロファイル(`docker/report-worker-seccomp.json`)と `systempaths=unconfined` を使っています。
-- **タスクの分離**: 文字起こしを読むタスク(章立て、校正)は LLM の API にしか接続できません。Web に出る調査タスクには文字起こしを渡さず、
+- **タスクの分離**: 文字起こしを読むタスク(章立て、校正、議論マップ)は LLM の API にしか接続できません。Web に出る調査タスクには文字起こしを渡さず、
   話者名を含まない一般的な調査トピックだけを渡します。文字起こしを外部に送らないためです。
 - **CLI の制限**: Bash は使わせません。ファイルの操作は作業ディレクトリの中だけです。
 - **出力の検証**: LLM の出力はスキーマ、行 ID、長さを検証し、話者と時刻は LLM に書かせません。資料の URL は、実際に取得したものだけを

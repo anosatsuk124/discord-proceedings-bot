@@ -10,32 +10,38 @@
 </style>
 </head>
 <body class="report">
+<div class="columns">
 <header id="top" class="masthead">
 {{masthead}}
 </header>
-<div class="columns">
 <nav id="toc" aria-label="目次">
-<h2>目次</h2>
 <form id="tools" role="search" hidden>
 <input id="q" type="search" placeholder="全文検索( / )" aria-label="全文検索">
 <p id="count" aria-live="polite"></p>
 <ul id="speakers" aria-label="話者で絞り込む">{{speakers}}</ul>
 <button id="orig" type="button">原文をすべて開く( o )</button>
 </form>
+<h2>目次</h2>
+<ul>
+<li><a href="#summary">要約</a></li>
+<li><a href="#map">議論マップ</a></li>
+</ul>
 {{toc}}
-<p class="toc-extra"><a href="#summary">全体のまとめ</a> / <a href="#map">論点の見取り図</a> / <a href="#references">関連資料</a></p>
+<ul>
+<li><a href="#references">関連資料</a></li>
+</ul>
 </nav>
 <main>
 <section id="summary">
-<h2>全体のまとめ</h2>
+<h2>要約</h2>
 {{summary}}
 </section>
 <section id="map">
-<h2>論点の見取り図</h2>
+<h2>議論マップ</h2>
 {{map}}
 </section>
 <section id="transcript">
-<h2>校正済みの全文</h2>
+<h2>全文</h2>
 {{transcript}}
 </section>
 <section id="references">
@@ -43,9 +49,6 @@
 {{sources}}
 </section>
 </main>
-<nav id="axis" aria-label="時間軸">
-{{axis}}
-</nav>
 </div>
 <script>
 {{js}}

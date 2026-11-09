@@ -27,6 +27,7 @@ import {
     type Transcript,
 } from './transcript.ts';
 import type {
+    ConversationMap,
     CorrectionResult,
     LineCorrection,
     Outline,
@@ -37,6 +38,7 @@ import type {
 import {
     isSafeSourceUrl,
     validateCorrection,
+    validateMap,
     validateOutline,
     validateResearch,
     type Validation,
@@ -77,7 +79,7 @@ export interface PipelineOutput {
     readonly result: JobSuccess;
 }
 
-type TaskKind = 'outline' | 'research' | 'correct';
+type TaskKind = 'outline' | 'research' | 'correct' | 'map';
 
 interface TaskSpec<T> {
     readonly name: string;
@@ -121,6 +123,7 @@ class Pipeline {
             outline,
             research
         );
+        const map = await this.#makeMap(transcript, outline, corrections);
         const assets = this.#options.assets ?? (await loadCompileAssets());
         const html = compileReport(assets, {
             guildName: request.guildName,
@@ -131,6 +134,7 @@ class Pipeline {
             research,
             corrections,
             uncorrected,
+            map,
         });
         const first = transcript.lines[0] as Line;
         const last = transcript.lines.at(-1) as Line;
@@ -361,6 +365,53 @@ class Pipeline {
         });
     }
 
+    /** 校正済みの全文から議論マップを作る。作れなくてもページは作る。 */
+    async #makeMap(
+        transcript: Transcript,
+        outline: Outline,
+        corrections: ReadonlyMap<string, LineCorrection>
+    ): Promise<ConversationMap | null> {
+        const { request } = this.#options;
+        const lines = transcript.lines.flatMap((line): Line[] => {
+            const correction = corrections.get(line.id);
+            if (correction?.kind === 'drop') return [];
+            return [{ ...line, raw: correction?.text ?? line.raw }];
+        });
+        if (splitForOutline(lines).length > 1) {
+            this.#warnings.push('会話が長すぎるため議論マップを省略');
+            return null;
+        }
+        const files = renderForOutline(transcript, lines, request.timeZone);
+        const transcriptFiles = Object.fromEntries(
+            files.map((text, i) => [
+                `transcript-${String(i + 1).padStart(2, '0')}.txt`,
+                text,
+            ])
+        );
+        const chapterCount = outline.chapters.length;
+        const map = await this.#runTask<ConversationMap>({
+            name: 'map',
+            kind: 'map',
+            directory: path.join(this.#workDirectory, 'map'),
+            inputs: {
+                'context.md': renderMapContext(outline),
+                ...transcriptFiles,
+            },
+            resultFile: path.join(this.#workDirectory, 'map.result.json'),
+            description: [
+                `入力ファイルをすべて、順に読んでください: context.md, ${Object.keys(transcriptFiles).join(', ')}`,
+                `章は全部で ${chapterCount} 章です。phases は 1 章から ${chapterCount} 章までを隙間なく覆ってください。`,
+                `参加者の名前は次のとおりです(speaker にはこの名前を書く): ${transcript.participants.join('、')}`,
+            ].join('\n'),
+            validate: (value) =>
+                validateMap(value, { transcript, chapterCount }),
+        });
+        if (map === null) {
+            this.#warnings.push('議論マップを作れませんでした');
+        }
+        return map;
+    }
+
     /** タスクを実行して検証を通った結果を返す。何度やってもだめなら null。 */
     async #runTask<T>(spec: TaskSpec<T>): Promise<T | null> {
         const cached = await readJsonIfExists(spec.resultFile);
@@ -486,6 +537,38 @@ ${glossary || '(なし)'}
 # 調べた資料(用語の正しい表記の参考)
 
 ${sources || '(なし)'}
+`;
+}
+
+function renderMapContext(outline: Outline): string {
+    const chapters = outline.chapters
+        .map(
+            (c, i) => `${i + 1}. ${c.start}〜${c.end} ${c.title}: ${c.summary}`
+        )
+        .join('\n');
+    const threads = outline.threads
+        .map((t) => `- ${t.topic}: ${t.question}`)
+        .join('\n');
+    const glossary = outline.glossary
+        .map((g) => `- ${g.term}: ${g.note}`)
+        .join('\n');
+    return `# 会話の概要
+
+${outline.title}
+
+${outline.lede}
+
+# 章(番号は phases と chapters で使う)
+
+${chapters}
+
+# 論点の候補
+
+${threads || '(なし)'}
+
+# 用語集
+
+${glossary || '(なし)'}
 `;
 }
 

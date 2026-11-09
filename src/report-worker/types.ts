@@ -92,6 +92,77 @@ export interface CorrectionResult {
     readonly lines: readonly LineCorrection[];
 }
 
+export const MOVE_KINDS = [
+    'claim',
+    'reason',
+    'example',
+    'objection',
+    'reply',
+    'question',
+    'concession',
+] as const;
+export type MoveKind = (typeof MOVE_KINDS)[number];
+
+/** 議論の中の 1 つの動き。主張、理由、反論など。 */
+export interface Move {
+    readonly kind: MoveKind;
+    readonly speaker: string;
+    readonly text: string;
+    readonly refs: readonly string[];
+}
+
+export interface Branch {
+    readonly stance: string;
+    readonly moves: readonly Move[];
+}
+
+export const OUTCOME_STATUSES = [
+    'agreed',
+    'partial',
+    'unresolved',
+    'shifted',
+] as const;
+export type OutcomeStatus = (typeof OUTCOME_STATUSES)[number];
+
+export interface Outcome {
+    readonly status: OutcomeStatus;
+    readonly text: string;
+    readonly refs: readonly string[];
+}
+
+export interface DebateLink {
+    readonly to: string;
+    readonly text: string;
+}
+
+/** 問いから枝に分かれ、結果に行き着く 1 つの議論。 */
+export interface Debate {
+    readonly id: string;
+    readonly title: string;
+    readonly question: string;
+    readonly chapters: readonly number[];
+    readonly branches: readonly Branch[];
+    readonly outcome: Outcome;
+    readonly links: readonly DebateLink[];
+}
+
+/** 章をまとめた、会話の大きな局面。 */
+export interface Phase {
+    readonly title: string;
+    readonly first_chapter: number;
+    readonly last_chapter: number;
+    readonly summary: string;
+    readonly keywords: readonly string[];
+    /** 次の局面に移ったきっかけ。最後の局面は null。 */
+    readonly transition: string | null;
+}
+
+export interface ConversationMap {
+    readonly through_line: string | null;
+    readonly phases: readonly Phase[];
+    readonly debates: readonly Debate[];
+}
+
 /** 関連資料。どのトピックのものかを付けて持つ。 */
 export interface TopicSources {
     readonly topic: ResearchTopic;

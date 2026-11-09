@@ -24,6 +24,7 @@ import {
 import {
     isSafeSourceUrl,
     validateCorrection,
+    validateMap,
     validateOutline,
     validateResearch,
 } from '../src/report-worker/validate.ts';
@@ -497,6 +498,142 @@ describe('SKILL のスキーマと検証の一致', () => {
             ).ok,
             true
         );
+    });
+});
+
+describe('議論マップの検証', () => {
+    const t = buildTranscript([
+        {
+            sessionId: 's',
+            channelName: null,
+            startedAt: new Date(0),
+            endedAt: new Date(1),
+            rows: [row('Alice', 1, 'a'), row('Bob', 2, 'b')],
+        },
+    ]);
+    const context = { transcript: t, chapterCount: 2 };
+    const phase = (
+        first_chapter: number,
+        last_chapter: number,
+        transition: string | null
+    ) => ({
+        title: '局面',
+        first_chapter,
+        last_chapter,
+        summary: '要約。',
+        keywords: ['語'],
+        transition,
+    });
+    const debate = (overrides: Record<string, unknown> = {}) => ({
+        id: 'd1',
+        title: '題',
+        question: '問い。',
+        chapters: [1],
+        branches: [
+            {
+                stance: '立場',
+                moves: [
+                    {
+                        kind: 'claim',
+                        speaker: 'Alice',
+                        text: '主張。',
+                        refs: ['l1'],
+                    },
+                ],
+            },
+        ],
+        outcome: { status: 'agreed', text: '結果。', refs: ['l2'] },
+        links: [],
+        ...overrides,
+    });
+    const errorsOf = (value: unknown): string =>
+        (() => {
+            const result = validateMap(value, context);
+            return result.ok ? '' : result.errors.join('\n');
+        })();
+    const map = (phases: unknown[], debates: unknown[] = [debate()]) => ({
+        through_line: null,
+        phases,
+        debates,
+    });
+
+    it('全章を覆う局面と実在の行を持つマップは通る', () => {
+        assert.equal(
+            errorsOf(map([phase(1, 1, 'きっかけ'), phase(2, 2, null)])),
+            ''
+        );
+    });
+
+    it('局面の隙間と、最後の局面以外の transition 欠落を落とす', () => {
+        assert.match(
+            errorsOf(map([phase(1, 1, 'きっかけ'), phase(3, 2, null)])),
+            /first_chapter/
+        );
+        assert.match(
+            errorsOf(map([phase(1, 1, null), phase(2, 2, null)])),
+            /きっかけを書いて/
+        );
+        assert.match(errorsOf(map([phase(1, 1, null)])), /2 章で終えて/);
+    });
+
+    it('存在しない行、参加者でない話者、未知の議論へのリンクを落とす', () => {
+        const phases = [phase(1, 2, null)];
+        const move = (overrides: Record<string, unknown>) =>
+            debate({
+                branches: [
+                    {
+                        stance: '立場',
+                        moves: [
+                            {
+                                kind: 'claim',
+                                speaker: 'Alice',
+                                text: '主張。',
+                                refs: ['l1'],
+                                ...overrides,
+                            },
+                        ],
+                    },
+                ],
+            });
+        assert.match(
+            errorsOf(map(phases, [move({ refs: ['l99'] })])),
+            /存在しない行/
+        );
+        assert.match(
+            errorsOf(map(phases, [move({ speaker: 'S1' })])),
+            /参加者の名前/
+        );
+        assert.match(
+            errorsOf(map(phases, [move({ kind: 'attack' })])),
+            /のどれかに/
+        );
+        assert.match(
+            errorsOf(
+                map(phases, [debate({ links: [{ to: 'd9', text: '関連' }] })])
+            ),
+            /ほかの議論図の id/
+        );
+    });
+
+    it('スキーマの例は検証を通り、必須項目を欠くと落ちる', async () => {
+        const { examples, required } = JSON.parse(
+            await readFile(
+                new URL(
+                    '../skills/proceedings-report/schemas/map.schema.json',
+                    import.meta.url
+                ),
+                'utf8'
+            )
+        ) as { required: string[]; examples: unknown[] };
+        const exampleContext = { transcript: t, chapterCount: 1 };
+        assert.equal(validateMap(examples[0], exampleContext).ok, true);
+        for (const key of required) {
+            const { [key]: _removed, ...rest } = examples[0] as Record<
+                string,
+                unknown
+            >;
+            assert.equal(validateMap(rest, exampleContext).ok, false, key);
+        }
     });
 });
 

@@ -1,6 +1,6 @@
 ---
 name: proceedings-report
-description: Discord の音声会話の文字起こしを、要約・章立て・関連資料・校正の JSON にする。カレントディレクトリに task.md があるときに使う。
+description: Discord の音声会話の文字起こしを、要約・章立て・関連資料・校正・議論マップの JSON にする。カレントディレクトリに task.md があるときに使う。
 ---
 
 # 文字起こしの整理
@@ -36,3 +36,4 @@ Discord の音声会話を自動で文字起こししたものを整理する作
 - `outline`: `references/outline.md`(全体のまとめと章立て)
 - `research`: `references/research.md`(関連資料の調査)
 - `correct`: `references/correct.md`(発言の校正)
+- `map`: `references/map.md`(会話の流れと議論の構造)

@@ -1,0 +1,194 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "map",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["through_line", "phases", "debates"],
+    "properties": {
+        "through_line": {
+            "type": ["string", "null"],
+            "maxLength": 240
+        },
+        "phases": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 8,
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "title",
+                    "first_chapter",
+                    "last_chapter",
+                    "summary",
+                    "keywords",
+                    "transition"
+                ],
+                "properties": {
+                    "title": { "type": "string", "maxLength": 40 },
+                    "first_chapter": { "type": "integer", "minimum": 1 },
+                    "last_chapter": { "type": "integer", "minimum": 1 },
+                    "summary": { "type": "string", "maxLength": 400 },
+                    "keywords": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 6,
+                        "items": { "type": "string", "maxLength": 30 }
+                    },
+                    "transition": {
+                        "type": ["string", "null"],
+                        "maxLength": 160
+                    }
+                }
+            }
+        },
+        "debates": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "id",
+                    "title",
+                    "question",
+                    "chapters",
+                    "branches",
+                    "outcome",
+                    "links"
+                ],
+                "properties": {
+                    "id": { "type": "string", "pattern": "^d[0-9]+$" },
+                    "title": { "type": "string", "maxLength": 40 },
+                    "question": { "type": "string", "maxLength": 160 },
+                    "chapters": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 10,
+                        "items": { "type": "integer", "minimum": 1 }
+                    },
+                    "branches": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 3,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["stance", "moves"],
+                            "properties": {
+                                "stance": { "type": "string", "maxLength": 40 },
+                                "moves": {
+                                    "type": "array",
+                                    "minItems": 1,
+                                    "maxItems": 10,
+                                    "items": { "$ref": "#/$defs/move" }
+                                }
+                            }
+                        }
+                    },
+                    "outcome": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["status", "text", "refs"],
+                        "properties": {
+                            "status": {
+                                "enum": [
+                                    "agreed",
+                                    "partial",
+                                    "unresolved",
+                                    "shifted"
+                                ]
+                            },
+                            "text": { "type": "string", "maxLength": 240 },
+                            "refs": { "$ref": "#/$defs/refs" }
+                        }
+                    },
+                    "links": {
+                        "type": "array",
+                        "maxItems": 3,
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["to", "text"],
+                            "properties": {
+                                "to": { "type": "string" },
+                                "text": { "type": "string", "maxLength": 120 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "$defs": {
+        "refs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": { "type": "string", "pattern": "^l[0-9]+$" }
+        },
+        "move": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind", "speaker", "text", "refs"],
+            "properties": {
+                "kind": {
+                    "enum": [
+                        "claim",
+                        "reason",
+                        "example",
+                        "objection",
+                        "reply",
+                        "question",
+                        "concession"
+                    ]
+                },
+                "speaker": { "type": "string" },
+                "text": { "type": "string", "maxLength": 140 },
+                "refs": { "$ref": "#/$defs/refs" }
+            }
+        }
+    },
+    "examples": [
+        {
+            "through_line": null,
+            "phases": [
+                {
+                    "title": "資料の共有方法を決める",
+                    "first_chapter": 1,
+                    "last_chapter": 1,
+                    "summary": "資料の読み方を相談し、画面共有で進めることにした。",
+                    "keywords": ["画面共有"],
+                    "transition": null
+                }
+            ],
+            "debates": [
+                {
+                    "id": "d1",
+                    "title": "資料は画面共有で読むべきか",
+                    "question": "全員で同じ箇所を読むにはどの方法がよいか。",
+                    "chapters": [1],
+                    "branches": [
+                        {
+                            "stance": "画面共有でよい",
+                            "moves": [
+                                {
+                                    "kind": "claim",
+                                    "speaker": "Alice",
+                                    "text": "画面共有なら全員が同じ箇所を見ながら読める。",
+                                    "refs": ["l1"]
+                                }
+                            ]
+                        }
+                    ],
+                    "outcome": {
+                        "status": "agreed",
+                        "text": "画面共有で読み進めることにした。",
+                        "refs": ["l2"]
+                    },
+                    "links": []
+                }
+            ]
+        }
+    ]
+}
