@@ -12,11 +12,18 @@ import { writeJsonAtomic } from './shared.ts';
  */
 
 /**
- * queued(worker が作成中)→ rendered(HTML ができた)→ published(本体を公開した)
+ * waiting(対象の録音の文字起こし待ち)→ queued(worker が作成中)
+ * → rendered(HTML ができた)→ published(本体を公開した)
  * → indexed(index を更新した)→ announced(すべて完了)。failed は打ち切り。
  */
 export type ReportStatus =
-    'queued' | 'rendered' | 'published' | 'indexed' | 'announced' | 'failed';
+    | 'waiting'
+    | 'queued'
+    | 'rendered'
+    | 'published'
+    | 'indexed'
+    | 'announced'
+    | 'failed';
 
 export type ReportTrigger = 'auto' | 'manual';
 

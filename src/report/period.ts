@@ -217,6 +217,52 @@ export function parseRange(
     };
 }
 
+export type ReportSelection =
+    | { readonly kind: 'pending' }
+    | { readonly kind: 'range'; readonly range: DateRange };
+
+export interface SelectionOptions {
+    readonly period: string | null;
+    readonly from: string | null;
+    readonly to: string | null;
+}
+
+/**
+ * /gijiroku report のオプションを対象の選び方にする。
+ *
+ * コマンドの後ろに続けて入力しただけの語は Discord からオプションとして届かない。
+ * 既定の対象を決めると意図しない録音でページを作ってしまうので、指定がなければ誤りにする。
+ */
+export function parseSelection(
+    { period, from, to }: SelectionOptions,
+    now: Date,
+    timeZone: string
+): ReportSelection {
+    if (period !== null && (from !== null || to !== null)) {
+        throw new PeriodError('period と from / to は同時に指定できません。');
+    }
+    if (from === null && to !== null) {
+        throw new PeriodError('to を使うときは from も指定してください。');
+    }
+    if (from !== null) {
+        return { kind: 'range', range: parseRange(from, to, now, timeZone) };
+    }
+    if (period === null) {
+        throw new PeriodError(
+            '対象の期間を指定してください。period の候補から選ぶか(today など)、from に開始日時を入れます。'
+        );
+    }
+    if (period === 'pending') return { kind: 'pending' };
+    return {
+        kind: 'range',
+        range: resolvePeriod(
+            period as Exclude<PeriodChoice, 'pending'>,
+            now,
+            timeZone
+        ),
+    };
+}
+
 /** その時刻の年と月(タイムゾーン考慮)。公開先のパスに使う。 */
 export function yearMonthOf(
     date: Date,
