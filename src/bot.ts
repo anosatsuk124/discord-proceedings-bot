@@ -13,11 +13,31 @@ import {
     type VoiceConnection,
 } from '@discordjs/voice';
 import { AutoLeaveTimers } from './auto-leave.ts';
-import { COMMAND_NAME, START_SUBCOMMAND, STOP_SUBCOMMAND } from './commands.ts';
+import {
+    COMMAND_NAME,
+    FROM_OPTION,
+    INDEX_SUBCOMMAND,
+    PERIOD_OPTION,
+    REPORT_SUBCOMMAND,
+    START_SUBCOMMAND,
+    STOP_SUBCOMMAND,
+    TO_OPTION,
+} from './commands.ts';
 import type { Config } from './config.ts';
 import type { Poster } from './delivery.ts';
 import type { SessionManifest } from './manifest.ts';
 import { RecordingSession, type Logger } from './recording-session.ts';
+import type {
+    ManualOutcome,
+    ReportCoordinator,
+    ReportSelection,
+} from './report/coordinator.ts';
+import {
+    PeriodError,
+    parseRange,
+    resolvePeriod,
+    type PeriodChoice,
+} from './report/period.ts';
 import { watchVoiceTraffic } from './voice-debug.ts';
 
 const READY_TIMEOUT_MS = 20_000;
@@ -39,6 +59,7 @@ export interface ProceedingsBotOptions {
 /**
  * /gijiroku start と /gijiroku stop を受けて、サーバーごとに 1 つの録音セッションを管理する。
  * ボイスチャンネルから人がいなくなったら、少し待ってから自動で録音を終える。
+ * /gijiroku report と /gijiroku index は ReportCoordinator に渡す。
  */
 export class ProceedingsBot {
     readonly #client: Client;
@@ -55,6 +76,8 @@ export class ProceedingsBot {
      */
     readonly #finishing = new Map<string, Promise<unknown>>();
     readonly #autoLeave: AutoLeaveTimers;
+    /** 議事録ページの機能が使えないときは null。 */
+    #reports: ReportCoordinator | null = null;
 
     constructor(options: ProceedingsBotOptions) {
         this.#client = options.client;
@@ -82,6 +105,12 @@ export class ProceedingsBot {
                 case STOP_SUBCOMMAND:
                     await this.#leave(interaction);
                     break;
+                case REPORT_SUBCOMMAND:
+                    await this.#report(interaction);
+                    break;
+                case INDEX_SUBCOMMAND:
+                    await this.#index(interaction);
+                    break;
             }
         } catch (error) {
             this.#logger.error(
@@ -90,6 +119,20 @@ export class ProceedingsBot {
             );
             await this.#replyError(interaction).catch(() => {});
         }
+    }
+
+    /** 議事録ページの機能を使えるようにする。main で一度だけ呼ぶ。 */
+    attachReports(reports: ReportCoordinator): void {
+        this.#reports = reports;
+    }
+
+    /** そのサーバーで録音中、または録音の開始・終了の途中か。 */
+    isRecording(guildId: string): boolean {
+        return (
+            this.#sessions.has(guildId) ||
+            this.#joining.has(guildId) ||
+            this.#finishing.has(guildId)
+        );
     }
 
     /** 誰かがボイスチャンネルに出入りしたら呼ぶ。 */
@@ -236,6 +279,114 @@ export class ProceedingsBot {
         );
     }
 
+    /** /gijiroku report。ボイスチャンネルにいなくても、サーバー内のどこからでも実行できる。 */
+    async #report(interaction: ChatInputCommandInteraction): Promise<void> {
+        if (!interaction.inCachedGuild()) {
+            await this.#replyPrivately(
+                interaction,
+                'サーバー内で実行してください。'
+            );
+            return;
+        }
+        if (this.#reports === null) {
+            await this.#replyPrivately(
+                interaction,
+                this.#config.reportDisabledReason ??
+                    '議事録ページの生成は無効です。'
+            );
+            return;
+        }
+        let selection: ReportSelection;
+        try {
+            selection = this.#parseSelection(interaction);
+        } catch (error) {
+            if (!(error instanceof PeriodError)) throw error;
+            await this.#replyPrivately(interaction, error.message);
+            return;
+        }
+        // 録音の一覧を読むので時間がかかることがある。3 秒以内に応答するため先に defer する。
+        await interaction.deferReply();
+        const outcome = await this.#reports.requestManual({
+            guildId: interaction.guildId,
+            guildName: interaction.guild.name,
+            channelId: interaction.channelId,
+            selection,
+        });
+        await interaction.editReply(reportReply(outcome));
+    }
+
+    #parseSelection(
+        interaction: ChatInputCommandInteraction<'cached'>
+    ): ReportSelection {
+        const period = interaction.options.getString(PERIOD_OPTION);
+        const from = interaction.options.getString(FROM_OPTION);
+        const to = interaction.options.getString(TO_OPTION);
+        if (period !== null && (from !== null || to !== null)) {
+            throw new PeriodError(
+                'period と from / to は同時に指定できません。'
+            );
+        }
+        if (from === null && to !== null) {
+            throw new PeriodError('to を使うときは from も指定してください。');
+        }
+        const timeZone = this.#reportTimeZone();
+        if (from !== null) {
+            return {
+                kind: 'range',
+                range: parseRange(from, to, new Date(), timeZone),
+            };
+        }
+        if (period === null || period === 'pending') {
+            return { kind: 'pending' };
+        }
+        return {
+            kind: 'range',
+            range: resolvePeriod(
+                period as Exclude<PeriodChoice, 'pending'>,
+                new Date(),
+                timeZone
+            ),
+        };
+    }
+
+    #reportTimeZone(): string {
+        return this.#config.report?.timeZone ?? 'Asia/Tokyo';
+    }
+
+    /** /gijiroku index。 */
+    async #index(interaction: ChatInputCommandInteraction): Promise<void> {
+        const guildId = interaction.guildId;
+        if (guildId === null) {
+            await this.#replyPrivately(
+                interaction,
+                'サーバー内で実行してください。'
+            );
+            return;
+        }
+        const url = await this.#reports?.indexUrl(guildId);
+        if (url === undefined) {
+            await this.#replyPrivately(
+                interaction,
+                this.#config.reportDisabledReason ??
+                    '議事録ページの生成は無効です。'
+            );
+            return;
+        }
+        await this.#replyPrivately(
+            interaction,
+            url === null
+                ? 'まだ議事録ページがありません。'
+                : `このサーバーの議事録の入口ページです。\n<${url}>`
+        );
+    }
+
+    async #replyPrivately(
+        interaction: ChatInputCommandInteraction,
+        content: string
+    ): Promise<void> {
+        await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+    }
+
     /**
      * 録音を止めて接続を切る。同じサーバーで二度呼ばれても一度しか処理しない
      * (二度目以降は undefined を返す)。
@@ -374,6 +525,17 @@ export class ProceedingsBot {
                 flags: MessageFlags.Ephemeral,
             });
         }
+    }
+}
+
+function reportReply(outcome: ManualOutcome): string {
+    switch (outcome.kind) {
+        case 'busy':
+            return 'このサーバーの議事録ページを生成中です。終わってからもう一度実行してください。';
+        case 'empty':
+            return '対象になる録音がありません。';
+        case 'accepted':
+            return `📄 録音 ${outcome.sessionCount} 件の議事録ページを作り始めました。できたらこのチャンネルに投稿します(数十分かかります)。`;
     }
 }
 

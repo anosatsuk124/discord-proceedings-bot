@@ -12,6 +12,7 @@
         "build": "tsc -p tsconfig.build.json",
         "start": "node dist/main.js",
         "dev": "node --env-file-if-exists=.env src/main.ts",
+        "report": "node --env-file-if-exists=.env src/report-worker/cli.ts",
         "typecheck": "tsc --noEmit",
         "test": "node --test \"test/**/*.test.ts\"",
         "fmt": "prettier --write .",

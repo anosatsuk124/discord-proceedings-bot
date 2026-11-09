@@ -1,0 +1,39 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "correction",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["chunk", "lines"],
+    "properties": {
+        "chunk": { "type": "string" },
+        "lines": {
+            "type": "array",
+            "description": "直す行だけを、行の順に書く。drop のときは text を書かない。",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "kind"],
+                "properties": {
+                    "id": { "type": "string", "pattern": "^l[0-9]+$" },
+                    "kind": { "enum": ["fix", "infer", "drop"] },
+                    "text": { "type": "string" },
+                    "note": { "type": "string", "maxLength": 120 }
+                }
+            }
+        }
+    },
+    "examples": [
+        {
+            "chunk": "p001",
+            "lines": [
+                { "id": "l1", "kind": "fix", "text": "画面共有でいい?" },
+                {
+                    "id": "l2",
+                    "kind": "infer",
+                    "text": "見よう",
+                    "note": "直前の依頼への返事"
+                }
+            ]
+        }
+    ]
+}

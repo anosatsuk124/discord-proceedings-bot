@@ -40,10 +40,60 @@ services:
             RECORDING_RETENTION_DAYS: ${RECORDING_RETENTION_DAYS:-30}
             # 音声接続(DAVE を含む)のデバッグログ。録音がうまくいかないときに true にする
             VOICE_DEBUG: ${VOICE_DEBUG:-false}
+            PROCEEDINGS_TIMEZONE: ${PROCEEDINGS_TIMEZONE:-Asia/Tokyo}
+            # 議事録ページの生成。LLM の設定は report-worker にだけ渡す
+            REPORT_AGENT: ${REPORT_AGENT:-off}
+            REPORT_AUTO_DELAY_HOURS: ${REPORT_AUTO_DELAY_HOURS:-12}
+            REPORT_JOB_TIMEOUT_MINUTES: ${REPORT_JOB_TIMEOUT_MINUTES:-240}
+            REPORT_PUBLISHER: ${REPORT_PUBLISHER:-simple-static-pager}
+            PAGER_REPO: ${PAGER_REPO:-}
+            PAGER_BRANCH: ${PAGER_BRANCH:-html}
+            PAGER_GITHUB_TOKEN: ${PAGER_GITHUB_TOKEN:-}
         volumes:
             - *data-volume
+            - report-jobs:/report-jobs
         # 終了時に録音中の発言を閉じて manifest.json を書く時間
         stop_grace_period: 30s
+
+    # 議事録ページを LLM で作る。COMPOSE_PROFILES=report のときだけ動く。
+    # 文字起こしは LLM への入力になるので、Discord と GitHub のトークンや録音はここに渡さない。
+    report-worker:
+        <<: *hardening
+        profiles: ['report']
+        build:
+            context: .
+            target: report-worker
+        image: discord-proceedings-report-worker:latest
+        pull_policy: build
+        environment:
+            REPORT_AGENT: ${REPORT_AGENT:-off}
+            REPORT_AGENT_MODEL: ${REPORT_AGENT_MODEL:-}
+            REPORT_AGENT_EFFORT: ${REPORT_AGENT_EFFORT:-}
+            REPORT_AGENT_SANDBOX: ${REPORT_AGENT_SANDBOX:-srt}
+            REPORT_AGENT_ALLOWED_DOMAINS: ${REPORT_AGENT_ALLOWED_DOMAINS:-}
+            REPORT_AGENT_CONCURRENCY: ${REPORT_AGENT_CONCURRENCY:-3}
+            REPORT_AGENT_TASK_TIMEOUT_SECONDS: ${REPORT_AGENT_TASK_TIMEOUT_SECONDS:-900}
+            REPORT_AGENT_MAX_BUDGET_USD: ${REPORT_AGENT_MAX_BUDGET_USD:-}
+            REPORT_RESEARCH: ${REPORT_RESEARCH:-on}
+            REPORT_RESEARCH_ALLOWED_DOMAINS: ${REPORT_RESEARCH_ALLOWED_DOMAINS:-}
+            REPORT_RESEARCH_MAX_TOPICS: ${REPORT_RESEARCH_MAX_TOPICS:-10}
+            # LLM の認証情報。使う CLI の分だけ .env に書く
+            CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+            ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+            OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+            OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+            OPENCODE_API_KEY: ${OPENCODE_API_KEY:-}
+        security_opt:
+            - no-new-privileges:true
+            # srt が CLI をさらに包むために、このサービスにだけ user namespace を許す。
+            # 既定のプロファイルに clone、unshare、mount、pivot_root、setns を足したもの。
+            - seccomp=./docker/report-worker-seccomp.json
+            # srt の中に新しい /proc を作るために要る(これがないと PID の隔離が弱いモードになる)。
+            - systempaths=unconfined
+        tmpfs:
+            - /tmp:size=512m
+        volumes:
+            - report-jobs:/report-jobs
 
     recognizer:
         <<: *hardening
@@ -75,3 +125,5 @@ services:
 volumes:
     # ダウンロードしたモデルのキャッシュ
     models:
+    # bot と report-worker のあいだの受け渡し。処理中のジョブの文字起こしだけが入る
+    report-jobs:
