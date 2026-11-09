@@ -190,6 +190,8 @@ describe('議事録の投稿', () => {
             manifest: {
                 sessionId: 's',
                 channelId: 'v',
+                guildName: null,
+                channelName: null,
                 textChannelId: 't',
                 startedAt: new Date(0),
                 endedAt: new Date(0),

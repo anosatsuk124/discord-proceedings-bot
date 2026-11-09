@@ -2,3 +2,5 @@ dist
 node_modules
 data
 pnpm-lock.yaml
+# スロット {{name}} を含むので HTML として整形しない
+skills/proceedings-report/assets/*.template.html

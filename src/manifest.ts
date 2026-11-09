@@ -106,6 +106,8 @@ export async function writeManifest(
 export interface ManifestSummary {
     readonly sessionId: string;
     readonly channelId: string;
+    readonly guildName: string | null;
+    readonly channelName: string | null;
     readonly textChannelId: string | null;
     readonly startedAt: Date;
     readonly endedAt: Date;
@@ -136,11 +138,16 @@ export async function readManifestSummary(
         }
         return value;
     };
-    const textChannelId = m['text_channel_id'];
+    const optional = (key: string): string | null => {
+        const value = m[key];
+        return typeof value === 'string' ? value : null;
+    };
     return {
         sessionId: string('session_id'),
         channelId: string('channel_id'),
-        textChannelId: typeof textChannelId === 'string' ? textChannelId : null,
+        guildName: optional('guild_name'),
+        channelName: optional('channel_name'),
+        textChannelId: optional('text_channel_id'),
         startedAt: date('started_at'),
         endedAt: date('ended_at'),
         utteranceCount: Array.isArray(m['utterances'])

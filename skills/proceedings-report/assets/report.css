@@ -1,0 +1,525 @@
+/* 紙の記録。墨と朱の 2 色、罫線と余白で組む。カードや角丸のバッジは使わない。 */
+:root {
+    color-scheme: light dark;
+    --paper: #f8f5ee;
+    --ink: #24211c;
+    --sub: #6e675b;
+    --rule: #d8d0c0;
+    --shu: #b5341f;
+    --mark: #f2dcc0;
+    --serif:
+        'Hiragino Mincho ProN', 'Yu Mincho', 'YuMincho', 'Noto Serif CJK JP',
+        'Noto Serif JP', serif;
+    --gothic:
+        'Hiragino Sans', 'Yu Gothic', 'Noto Sans CJK JP', 'Noto Sans JP',
+        sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+        --paper: #1c1a16;
+        --ink: #e6e0d3;
+        --sub: #9c9484;
+        --rule: #3a362e;
+        --shu: #e17a63;
+        --mark: #5a3f25;
+    }
+}
+* {
+    box-sizing: border-box;
+}
+html {
+    background: var(--paper);
+    scroll-padding-top: 1.5rem;
+}
+body {
+    margin: 0;
+    padding: 0 16px 6rem;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 16.5px;
+    line-height: 1.95;
+    font-feature-settings: 'palt';
+    overflow-wrap: anywhere;
+}
+a {
+    color: inherit;
+    text-underline-offset: 0.2em;
+    text-decoration-thickness: 1px;
+}
+a:hover {
+    color: var(--shu);
+}
+:target {
+    background: var(--mark);
+}
+::highlight(hit) {
+    background: var(--mark);
+    color: inherit;
+}
+[hidden] {
+    display: none !important;
+}
+
+.masthead {
+    max-width: 64rem;
+    margin: 0 auto;
+    padding: 4.5rem 0 2.5rem;
+    border-bottom: 1px solid var(--ink);
+}
+.dateline {
+    margin: 0 0 0.6rem;
+    color: var(--sub);
+    font-size: 0.9rem;
+    letter-spacing: 0.04em;
+}
+h1 {
+    max-width: 46rem;
+    margin: 0 0 1.4rem;
+    font-size: clamp(1.8rem, 3.6vw, 2.6rem);
+    font-weight: 600;
+    line-height: 1.45;
+    letter-spacing: 0.02em;
+    text-wrap: balance;
+    word-break: auto-phrase;
+}
+.lede {
+    max-width: 42rem;
+    margin: 0 0 1.6rem;
+    font-size: 1.12rem;
+}
+.facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.1rem 2.2rem;
+    margin: 0;
+    color: var(--sub);
+    font-size: 0.86rem;
+}
+.facts div {
+    display: flex;
+    gap: 0.6em;
+}
+.facts dt,
+.facts dd {
+    margin: 0;
+}
+.notice {
+    max-width: 42rem;
+    margin: 1rem 0 0;
+    color: var(--sub);
+    font-size: 0.82rem;
+    line-height: 1.8;
+}
+
+.columns {
+    max-width: 64rem;
+    margin: 0 auto;
+}
+#toc {
+    padding: 1.6rem 0;
+    border-bottom: 1px solid var(--rule);
+    font-size: 0.9rem;
+    line-height: 1.7;
+}
+#toc h2 {
+    margin: 0 0 0.6rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+#toc ol {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+#toc ol li {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.18rem 0;
+}
+#toc a {
+    text-decoration: none;
+}
+#toc a span {
+    color: var(--sub);
+    margin-right: 0.3em;
+}
+#toc li[aria-current] a {
+    color: var(--shu);
+}
+#toc time {
+    flex: none;
+    color: var(--sub);
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+}
+.toc-extra {
+    margin: 0.9rem 0 0;
+    color: var(--sub);
+}
+.toc-extra a {
+    text-decoration: underline;
+}
+
+#tools {
+    margin: 0 0 1.2rem;
+}
+#q {
+    width: 100%;
+    padding: 0.35rem 0;
+    border: 0;
+    border-bottom: 1px solid var(--ink);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+}
+#q:focus {
+    outline: 0;
+    border-bottom-color: var(--shu);
+}
+#count {
+    min-height: 1.5em;
+    margin: 0.3rem 0;
+    color: var(--sub);
+    font-size: 0.8rem;
+}
+#speakers {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.1rem 1rem;
+    margin: 0 0 0.5rem;
+    padding: 0;
+    list-style: none;
+}
+#speakers li {
+    cursor: pointer;
+}
+#speakers li[aria-pressed='false'] {
+    color: var(--sub);
+    text-decoration: line-through;
+}
+#orig {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--sub);
+    font: inherit;
+    font-size: 0.82rem;
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+main {
+    max-width: 42rem;
+}
+main h2 {
+    margin: 3.2rem 0 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--ink);
+    font-size: 1.35rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+}
+main h3 {
+    margin: 2rem 0 0.5rem;
+    font-size: 1.15rem;
+    font-weight: 600;
+}
+main h4 {
+    margin: 1.2rem 0 0.3rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+main ul {
+    margin: 0.4rem 0 1rem;
+    padding-left: 1.2em;
+}
+.ref {
+    margin-left: 0.15em;
+    color: var(--shu);
+    font-size: 0.78em;
+    font-variant-numeric: tabular-nums;
+    text-decoration: none;
+}
+
+.thread {
+    margin-bottom: 1.6rem;
+}
+.question {
+    margin: 0 0 0.5rem;
+    color: var(--sub);
+}
+.thread dl {
+    margin: 0;
+}
+.thread dt {
+    margin-top: 0.5rem;
+    font-weight: 600;
+    font-size: 0.92rem;
+}
+.thread dd {
+    margin: 0;
+}
+
+#transcript section {
+    margin-top: 3rem;
+    padding-top: 1.4rem;
+    border-top: 1px solid var(--rule);
+}
+#transcript h3 {
+    margin: 0 0 0.7rem;
+    font-size: 1.3rem;
+}
+#transcript h3 span {
+    display: block;
+    color: var(--sub);
+    font-size: 0.82rem;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+}
+.flow {
+    margin: 0.6rem 0;
+    padding: 0;
+    list-style: none;
+    font-size: 0.94rem;
+}
+.flow b {
+    margin-right: 0.5em;
+    font-weight: 600;
+}
+.point {
+    margin: 0.6rem 0 0;
+    font-size: 0.94rem;
+}
+.point b {
+    margin-right: 0.5em;
+    color: var(--shu);
+    font-weight: 600;
+}
+
+details.sources {
+    margin-top: 1rem;
+    color: var(--ink);
+    font-size: 0.84rem;
+    line-height: 1.8;
+}
+.sources summary {
+    color: var(--sub);
+}
+.sources ul,
+#references ul {
+    padding: 0;
+    list-style: none;
+}
+.sources li,
+#references li {
+    margin-bottom: 0.7rem;
+}
+#references {
+    font-family: var(--gothic);
+    font-size: 0.88rem;
+    line-height: 1.8;
+}
+.sources p,
+#references li p {
+    margin: 0.1rem 0 0;
+}
+.domain,
+.relevance {
+    color: var(--sub);
+    font-size: 0.92em;
+}
+
+.log {
+    margin: 2rem 0 0;
+    padding: 0;
+    list-style: none;
+}
+.log > li {
+    position: relative;
+    padding: 0.75rem 0 0.75rem 4.2rem;
+    border-top: 1px solid transparent;
+}
+.log > li + li::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 4.2rem;
+    width: 2.2rem;
+    border-top: 1px solid var(--rule);
+}
+.who {
+    margin: 0;
+    font-family: var(--gothic);
+    font-size: 0.82rem;
+    line-height: 1.6;
+}
+.who a {
+    position: absolute;
+    left: 0;
+    top: 0.9rem;
+    color: var(--sub);
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    text-decoration: none;
+}
+.who b {
+    font-weight: 600;
+}
+.say {
+    margin: 0.1rem 0 0;
+}
+ins {
+    text-decoration: underline wavy var(--shu) 1px;
+    text-underline-offset: 0.22em;
+}
+.say small,
+.who small {
+    margin-left: 0.2em;
+    color: var(--shu);
+    font-family: var(--gothic);
+    font-size: 0.66em;
+}
+details {
+    margin: 0.15rem 0 0;
+    color: var(--sub);
+    font-family: var(--gothic);
+    font-size: 0.78rem;
+    line-height: 1.75;
+}
+summary {
+    cursor: pointer;
+    width: fit-content;
+}
+details p {
+    margin: 0.2rem 0 0;
+}
+
+#axis {
+    display: none;
+}
+
+@media (min-width: 72rem) {
+    .columns {
+        display: grid;
+        grid-template-columns: 15rem minmax(0, 42rem) 3.5rem;
+        gap: 3rem;
+        justify-content: center;
+        max-width: none;
+    }
+    .masthead {
+        max-width: calc(15rem + 42rem + 3.5rem + 6rem);
+    }
+    #toc {
+        position: sticky;
+        top: 0;
+        align-self: start;
+        max-height: 100vh;
+        overflow-y: auto;
+        padding: 2.4rem 0.4rem 2rem 0;
+        border-bottom: 0;
+        scrollbar-width: thin;
+    }
+    #axis {
+        position: sticky;
+        top: 2.4rem;
+        align-self: start;
+        display: block;
+        height: calc(100vh - 4.8rem);
+    }
+    #axis svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+    }
+    #axis .s0 {
+        fill: var(--sub);
+        opacity: 0.55;
+    }
+    #axis .s1 {
+        fill: var(--sub);
+        opacity: 0.32;
+    }
+    #axis .s2 {
+        fill: var(--sub);
+        opacity: 0.18;
+    }
+    #axis .s3 {
+        fill: var(--sub);
+        opacity: 0.1;
+    }
+    #axis line {
+        stroke: var(--rule);
+        stroke-width: 0.5;
+        vector-effect: non-scaling-stroke;
+    }
+    #axis .hit {
+        fill: transparent;
+    }
+    #axis a:hover line {
+        stroke: var(--shu);
+    }
+    #axis-now {
+        fill: var(--shu);
+    }
+}
+@media (max-width: 30rem) {
+    .masthead {
+        padding-top: 2.6rem;
+    }
+    .log > li {
+        padding-left: 0;
+    }
+    .log > li + li::before {
+        left: 0;
+    }
+    .who a {
+        position: static;
+        margin-right: 0.5em;
+    }
+}
+@media print {
+    #tools,
+    #axis,
+    .toc-extra {
+        display: none;
+    }
+    html,
+    body {
+        background: #fff;
+        color: #000;
+    }
+    body {
+        font-size: 11pt;
+    }
+}
+
+/* index */
+.index main {
+    max-width: 42rem;
+    margin: 0 auto;
+}
+.reports {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+.reports > li {
+    padding: 1.1rem 0;
+    border-bottom: 1px solid var(--rule);
+}
+.reports h3 {
+    margin: 0.1rem 0 0.3rem;
+    font-size: 1.2rem;
+}
+.reports p {
+    margin: 0 0 0.3rem;
+}
+.reports .dateline {
+    margin: 0;
+}
+.facts-line {
+    color: var(--sub);
+    font-size: 0.84rem;
+}

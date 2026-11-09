@@ -3,14 +3,18 @@ import { ProceedingsBot } from './bot.ts';
 import { commands } from './commands.ts';
 import { ConfigError, loadConfig, type Config } from './config.ts';
 import { deliverPending } from './delivery.ts';
-import { discordPoster } from './discord-poster.ts';
+import { discordPoster, systemChannelFor } from './discord-poster.ts';
 import { runPeriodically } from './periodic.ts';
+import { ReportCoordinator } from './report/coordinator.ts';
+import { GithubPagerPublisher } from './report/github-pager.ts';
 import { purgeExpiredRecordings } from './retention.ts';
 
 /** 議事録ができたかを見に行く間隔 */
 const DELIVERY_INTERVAL_MS = 15_000;
 /** 保存期間を過ぎた録音を消す間隔 */
 const RETENTION_INTERVAL_MS = 60 * 60 * 1000;
+/** 議事録ページの生成を進める間隔 */
+const REPORT_INTERVAL_MS = 15_000;
 
 function loadConfigOrExit(): Config {
     try {
@@ -33,6 +37,22 @@ const client = new Client({
 const poster = discordPoster(client);
 const bot = new ProceedingsBot({ client, config, poster });
 const stopTasks: Array<() => void> = [];
+
+const reports =
+    config.report === null
+        ? null
+        : new ReportCoordinator({
+              dataDir: config.dataDir,
+              jobsDir: config.report.jobsDir,
+              timeZone: config.report.timeZone,
+              autoDelayMs: config.report.autoDelayMs,
+              jobTimeoutMs: config.report.jobTimeoutMs,
+              publisher: new GithubPagerPublisher(config.report.publisher),
+              poster,
+              isRecording: (guildId) => bot.isRecording(guildId),
+              announceChannel: (guildId) => systemChannelFor(client, guildId),
+          });
+if (reports !== null) bot.attachReports(reports);
 
 /**
  * コマンドはサーバーごとに登録する。グローバルの登録と違い、すぐに一覧に反映される。
@@ -67,6 +87,13 @@ client.once(Events.ClientReady, async (ready) => {
                 })
         )
     );
+    if (reports !== null) {
+        stopTasks.push(
+            runPeriodically('advancing reports', REPORT_INTERVAL_MS, () =>
+                reports.tick()
+            )
+        );
+    }
     try {
         // 以前の版はグローバルに登録していた(/join, /leave)。残っていると一覧に出続けるので消す。
         await ready.application.commands.set([]);

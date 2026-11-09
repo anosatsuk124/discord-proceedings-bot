@@ -1,4 +1,9 @@
-import { DiscordAPIError, RESTJSONErrorCodes, type Client } from 'discord.js';
+import {
+    DiscordAPIError,
+    PermissionFlagsBits,
+    RESTJSONErrorCodes,
+    type Client,
+} from 'discord.js';
 import {
     PermanentDeliveryError,
     type OutgoingMessage,
@@ -13,6 +18,31 @@ const PERMANENT_ERRORS = new Set<number | string>([
     RESTJSONErrorCodes.CannotSendMessagesInNonTextChannel,
     RESTJSONErrorCodes.RequestEntityTooLarge,
 ]);
+
+/**
+ * サーバーのシステムメッセージのチャンネル(「〜をサーバーに追加しました」が出る場所)のうち、
+ * Bot が投稿できるものを返す。未設定や権限なしなら null。
+ */
+export async function systemChannelFor(
+    client: Client,
+    guildId: string
+): Promise<string | null> {
+    const guild = await client.guilds.fetch(guildId);
+    const channel = guild.systemChannel;
+    const me = guild.members.me ?? (await guild.members.fetchMe());
+    if (
+        channel === null ||
+        !channel
+            .permissionsFor(me)
+            .has([
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+            ])
+    ) {
+        return null;
+    }
+    return channel.id;
+}
 
 /** discord.js でチャンネルに投稿する Poster。 */
 export function discordPoster(client: Client): Poster {
