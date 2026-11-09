@@ -295,6 +295,156 @@ describe('ReportCoordinator', () => {
         assert.deepEqual(outcome, { kind: 'accepted', sessionCount: 1 });
     });
 
+    describe('文字起こし中の録音があるとき', () => {
+        const OLD = '20261105T120000Z-aaaa';
+        const TODAY = '20261109T100000Z-bbbb';
+        const today = {
+            ...manual,
+            selection: {
+                kind: 'range' as const,
+                range: {
+                    start: new Date('2026-11-08T15:00:00Z'),
+                    end: new Date('2026-11-09T15:00:00Z'),
+                    label: '今日',
+                },
+            },
+        };
+
+        async function addTranscribing(id: string, endedAt: string) {
+            await addSession(id, endedAt);
+            await rm(csvOf(id));
+        }
+
+        function csvOf(id: string): string {
+            return path.join(dataDir, 'sessions', 'g1', id, 'proceedings.csv');
+        }
+
+        async function finishTranscription(id: string, rows = 'Bob,t,はい\n') {
+            await writeFile(csvOf(id), `speaker,date,talk\n${rows}`);
+        }
+
+        async function jobSessionIds(): Promise<string[]> {
+            const [id] = await jobIds();
+            assert.ok(id);
+            const request = JSON.parse(
+                await readFile(path.join(jobsDir, id, JOB_REQUEST_FILE), 'utf8')
+            ) as JobRequest;
+            return request.sessions.map((s) => s.sessionId);
+        }
+
+        it('範囲にかかっていたら、終わるまで待って全部をまとめる', async () => {
+            await addSession(OLD, '2026-11-08T16:00:00Z');
+            await addTranscribing(TODAY, '2026-11-09T11:59:00Z');
+            assert.deepEqual(await coordinator().requestManual(today), {
+                kind: 'waiting',
+                sessionCount: 2,
+                transcribing: 1,
+            });
+            assert.deepEqual(await jobIds(), []);
+            assert.equal((await records())[0]?.status, 'waiting');
+
+            await coordinator().tick();
+            assert.deepEqual(await jobIds(), []);
+            assert.deepEqual(await coordinator().requestManual(today), {
+                kind: 'busy',
+            });
+
+            await finishTranscription(TODAY);
+            const c = coordinator(); // 再起動しても続く
+            await c.tick();
+            assert.deepEqual(await jobSessionIds(), [OLD, TODAY]);
+            assert.equal((await records())[0]?.status, 'queued');
+
+            await finishJob();
+            await c.tick();
+            assert.equal((await records())[0]?.status, 'announced');
+            assert.equal(poster.posts[0]?.channelId, 'text-9');
+        });
+
+        it('pending でも待ち、ほかの録音だけでは作らない', async () => {
+            await addSession(OLD, '2026-11-05T13:00:00Z');
+            await addTranscribing(TODAY, '2026-11-09T11:59:00Z');
+            const c = coordinator();
+            assert.deepEqual(await c.requestManual(manual), {
+                kind: 'waiting',
+                sessionCount: 2,
+                transcribing: 1,
+            });
+            assert.deepEqual(await jobIds(), []);
+            await finishTranscription(TODAY);
+            await c.tick();
+            assert.deepEqual(await jobSessionIds(), [OLD, TODAY]);
+        });
+
+        it('範囲の外なら待たない', async () => {
+            await addSession(TODAY, '2026-11-09T11:00:00Z');
+            await addTranscribing(
+                '20261110T100000Z-cccc',
+                '2026-11-10T11:00:00Z'
+            );
+            assert.deepEqual(await coordinator().requestManual(today), {
+                kind: 'accepted',
+                sessionCount: 1,
+            });
+        });
+
+        it('発言のなかった録音は除いて作る', async () => {
+            await addSession(OLD, '2026-11-08T16:00:00Z');
+            await addTranscribing(TODAY, '2026-11-09T11:59:00Z');
+            const c = coordinator();
+            await c.requestManual(today);
+            await finishTranscription(TODAY, '');
+            await c.tick();
+            assert.deepEqual(await jobSessionIds(), [OLD]);
+            assert.deepEqual((await records())[0]?.sessionIds, [OLD]);
+        });
+
+        it('どの録音にも発言がなければ失敗として知らせる', async () => {
+            await addTranscribing(TODAY, '2026-11-09T11:59:00Z');
+            const c = coordinator();
+            await c.requestManual(today);
+            await finishTranscription(TODAY, '');
+            await c.tick();
+            assert.equal((await records())[0]?.status, 'failed');
+            assert.match(
+                poster.posts[0]?.content ?? '',
+                /発言を取り出せません/
+            );
+            assert.deepEqual(await jobIds(), []);
+        });
+
+        it('時間内に終わらなければ失敗として知らせる', async () => {
+            await addTranscribing(TODAY, '2026-11-09T11:59:00Z');
+            const c = coordinator();
+            await c.requestManual(today);
+            now = new Date(now.getTime() + 120_000);
+            await c.tick();
+            assert.equal((await records())[0]?.status, 'failed');
+            assert.match(poster.posts[0]?.content ?? '', /文字起こしが時間内/);
+        });
+
+        it('待った時間は worker の制限時間に含めない', async () => {
+            await addTranscribing(TODAY, '2026-11-09T11:59:00Z');
+            const c = coordinator();
+            await c.requestManual(today);
+            now = new Date(now.getTime() + 50_000);
+            await finishTranscription(TODAY);
+            await c.tick();
+            now = new Date(now.getTime() + 50_000);
+            await c.tick();
+            assert.equal((await records())[0]?.status, 'queued');
+        });
+
+        it('待っている間は自動生成しない', async () => {
+            await addTranscribing(TODAY, '2026-11-09T11:59:00Z');
+            await coordinator().requestManual(today);
+            now = new Date(now.getTime() + 30_000);
+            await coordinator(1).tick();
+            assert.equal((await records()).length, 1);
+            assert.deepEqual(await jobIds(), []);
+        });
+    });
+
     it('worker の失敗はチャンネルに知らせ、まとめ済みにしない', async () => {
         await addSession('20261106T120000Z-aaaa', '2026-11-06T13:00:00Z');
         const c = coordinator();

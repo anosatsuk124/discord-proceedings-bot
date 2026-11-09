@@ -22,7 +22,7 @@ import {
     type JobRequest,
     type JobResult,
 } from './job-files.ts';
-import { yearMonthOf, type DateRange } from './period.ts';
+import { yearMonthOf, type ReportSelection } from './period.ts';
 import { DeployFailedError, type Publisher } from './publisher.ts';
 import { writeJsonAtomic } from './shared.ts';
 import {
@@ -66,10 +66,6 @@ export interface CoordinatorOptions {
     readonly now?: () => Date;
 }
 
-export type ReportSelection =
-    | { readonly kind: 'pending' }
-    | { readonly kind: 'range'; readonly range: DateRange };
-
 export interface ManualRequest {
     readonly guildId: string;
     readonly guildName: string | null;
@@ -79,6 +75,11 @@ export interface ManualRequest {
 
 export type ManualOutcome =
     | { readonly kind: 'accepted'; readonly sessionCount: number }
+    | {
+          readonly kind: 'waiting';
+          readonly sessionCount: number;
+          readonly transcribing: number;
+      }
     | { readonly kind: 'empty' }
     | { readonly kind: 'busy' };
 
@@ -109,18 +110,23 @@ export class ReportCoordinator {
         const sessions = (
             await listFinishedSessions(this.#options.dataDir, this.#logger)
         ).get(guildId);
-        const ready = (sessions ?? []).filter((s) => s.state === 'ready');
+        const usable = (sessions ?? []).filter(
+            (s) => s.state === 'ready' || s.state === 'transcribing'
+        );
         const covered = new Set(
             records.filter(coversSessions).flatMap((r) => r.sessionIds)
         );
         const chosen =
             selection.kind === 'pending'
-                ? ready.filter((s) => !covered.has(s.sessionId))
-                : ready.filter((s) =>
+                ? usable.filter((s) => !covered.has(s.sessionId))
+                : usable.filter((s) =>
                       overlaps(s, selection.range.start, selection.range.end)
                   );
         if (chosen.length === 0) return { kind: 'empty' };
-        await this.#createJob({
+        const transcribing = chosen.filter(
+            (s) => s.state === 'transcribing'
+        ).length;
+        const record = this.#newRecord({
             guildId,
             guildName: request.guildName,
             sessions: chosen,
@@ -131,6 +137,18 @@ export class ReportCoordinator {
                     ? 'まだまとめていない録音'
                     : selection.range.label,
         });
+        this.#logger.info(
+            `manual report for guild ${guildId} (${record.periodLabel}): ${chosen.length} session(s), ${transcribing} still transcribing`
+        );
+        if (transcribing > 0) {
+            await this.#store.save({ ...record, status: 'waiting' });
+            return {
+                kind: 'waiting',
+                sessionCount: chosen.length,
+                transcribing,
+            };
+        }
+        await this.#startJob(record, chosen);
         return { kind: 'accepted', sessionCount: chosen.length };
     }
 
@@ -177,25 +195,28 @@ export class ReportCoordinator {
             this.#logger.info(
                 `auto report for guild ${guildId}: ${chosen.length} session(s)`
             );
-            await this.#createJob({
-                guildId,
-                guildName: newest.guildName,
-                sessions: chosen,
-                trigger: 'auto',
-                notifyChannelId: newest.textChannelId,
-                periodLabel: 'まだまとめていない録音',
-            });
+            await this.#startJob(
+                this.#newRecord({
+                    guildId,
+                    guildName: newest.guildName,
+                    sessions: chosen,
+                    trigger: 'auto',
+                    notifyChannelId: newest.textChannelId,
+                    periodLabel: 'まだまとめていない録音',
+                }),
+                chosen
+            );
         }
     }
 
-    async #createJob(job: {
+    #newRecord(job: {
         readonly guildId: string;
         readonly guildName: string | null;
         readonly sessions: readonly SessionInfo[];
         readonly trigger: ReportTrigger;
         readonly notifyChannelId: string | null;
         readonly periodLabel: string;
-    }): Promise<void> {
+    }): ReportRecord {
         const now = this.#now();
         const id = newSessionId(now);
         const first = job.sessions[0];
@@ -204,15 +225,7 @@ export class ReportCoordinator {
             first.startedAt,
             this.#options.timeZone
         );
-        const directory = path.join(this.#options.jobsDir, id);
-        await mkdir(path.join(directory, JOB_INPUT_DIR), { recursive: true });
-        for (const session of job.sessions) {
-            await copyFile(
-                path.join(session.directory, PROCEEDINGS_FILE),
-                path.join(directory, JOB_INPUT_DIR, `${session.sessionId}.csv`)
-            );
-        }
-        await this.#store.save({
+        return {
             id,
             guildId: job.guildId,
             guildName: job.guildName,
@@ -223,15 +236,31 @@ export class ReportCoordinator {
             notifyChannelId: job.notifyChannelId,
             createdAt: now.toISOString(),
             path: `reports/${job.guildId}/${year}/${month}/${id}.html`,
-        });
+        };
+    }
+
+    /** 文字起こしの済んだ録音をジョブの場所に写し、worker に渡す。 */
+    async #startJob(
+        record: ReportRecord,
+        sessions: readonly SessionInfo[]
+    ): Promise<void> {
+        const directory = path.join(this.#options.jobsDir, record.id);
+        await mkdir(path.join(directory, JOB_INPUT_DIR), { recursive: true });
+        for (const session of sessions) {
+            await copyFile(
+                path.join(session.directory, PROCEEDINGS_FILE),
+                path.join(directory, JOB_INPUT_DIR, `${session.sessionId}.csv`)
+            );
+        }
+        await this.#store.save(record);
         const request: JobRequest = {
             version: JOB_VERSION,
-            jobId: id,
-            guildName: job.guildName,
+            jobId: record.id,
+            guildName: record.guildName,
             timeZone: this.#options.timeZone,
-            periodLabel: job.periodLabel,
-            createdAt: now.toISOString(),
-            sessions: job.sessions.map((s) => ({
+            periodLabel: record.periodLabel,
+            createdAt: record.createdAt,
+            sessions: sessions.map((s) => ({
                 sessionId: s.sessionId,
                 channelName: s.channelName,
                 startedAt: s.startedAt.toISOString(),
@@ -262,6 +291,9 @@ export class ReportCoordinator {
 
     async #step(progress: Progress): Promise<void> {
         switch (progress.record.status) {
+            case 'waiting':
+                await this.#startWhenTranscribed(progress);
+                break;
             case 'queued':
                 await this.#collectResult(progress);
                 break;
@@ -286,6 +318,46 @@ export class ReportCoordinator {
     ): Promise<void> {
         progress.record = { ...progress.record, ...patch };
         await this.#store.save(progress.record);
+    }
+
+    /** 対象の録音の文字起こしがすべて終わったらジョブを作る。発言のなかった録音は除く。 */
+    async #startWhenTranscribed(progress: Progress): Promise<void> {
+        const { record } = progress;
+        const byGuild = await listFinishedSessions(
+            this.#options.dataDir,
+            this.#logger
+        );
+        const targets = (byGuild.get(record.guildId) ?? []).filter((s) =>
+            record.sessionIds.includes(s.sessionId)
+        );
+        const now = this.#now();
+        if (targets.some((s) => s.state === 'transcribing')) {
+            const age = now.getTime() - new Date(record.createdAt).getTime();
+            if (age > this.#options.jobTimeoutMs) {
+                await this.#fail(
+                    progress,
+                    '文字起こしが時間内に終わりませんでした'
+                );
+            }
+            return;
+        }
+        const ready = targets.filter((s) => s.state === 'ready');
+        if (ready.length === 0) {
+            await this.#fail(
+                progress,
+                '対象の録音から発言を取り出せませんでした'
+            );
+            return;
+        }
+        // worker の制限時間に文字起こしを待った時間を含めないよう、ここを起点にし直す。
+        const queued: ReportRecord = {
+            ...record,
+            status: 'queued',
+            sessionIds: ready.map((s) => s.sessionId),
+            createdAt: now.toISOString(),
+        };
+        await this.#startJob(queued, ready);
+        progress.record = queued;
     }
 
     async #collectResult(progress: Progress): Promise<void> {

@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
     PeriodError,
     parseRange,
+    parseSelection,
     resolvePeriod,
     yearMonthOf,
     zonedTime,
@@ -15,6 +16,63 @@ const NOW = new Date('2026-11-09T01:30:00Z');
 function iso(date: Date): string {
     return date.toISOString();
 }
+
+describe('コマンドのオプションの解釈', () => {
+    const none = { period: null, from: null, to: null };
+
+    it('何も指定されていなければ誤りにする', () => {
+        assert.throws(
+            () => parseSelection(none, NOW, TOKYO),
+            (error: unknown) =>
+                error instanceof PeriodError && /period/.test(error.message)
+        );
+    });
+
+    it('pending を選んだときだけ、まとめていない録音を対象にする', () => {
+        assert.deepEqual(
+            parseSelection({ ...none, period: 'pending' }, NOW, TOKYO),
+            { kind: 'pending' }
+        );
+    });
+
+    it('today はその日の範囲になる', () => {
+        const selection = parseSelection(
+            { ...none, period: 'today' },
+            NOW,
+            TOKYO
+        );
+        assert.equal(selection.kind, 'range');
+        assert.equal(
+            selection.kind === 'range' && selection.range.label,
+            '今日'
+        );
+    });
+
+    it('from は範囲になる', () => {
+        const selection = parseSelection(
+            { ...none, from: '2026-11-06', to: '2026-11-07' },
+            NOW,
+            TOKYO
+        );
+        assert.equal(selection.kind, 'range');
+    });
+
+    it('period と from の併用、from のない to は誤りにする', () => {
+        assert.throws(
+            () =>
+                parseSelection(
+                    { period: 'today', from: '2026-11-06', to: null },
+                    NOW,
+                    TOKYO
+                ),
+            PeriodError
+        );
+        assert.throws(
+            () => parseSelection({ ...none, to: '2026-11-07' }, NOW, TOKYO),
+            PeriodError
+        );
+    });
+});
 
 describe('期間の名前の解決(JST)', () => {
     it('today はその日の 0 時から翌日の 0 時まで', () => {

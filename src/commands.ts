@@ -36,7 +36,7 @@ export const commands = [
             subcommand
                 .setName(REPORT_SUBCOMMAND)
                 .setDescription(
-                    '録音をまとめた議事録ページを作ります(指定がなければ、まとめていない録音)'
+                    '録音をまとめた議事録ページを作ります(period か from で対象を指定)'
                 )
                 .addStringOption((option) =>
                     option

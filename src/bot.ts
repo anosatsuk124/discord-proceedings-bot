@@ -27,16 +27,11 @@ import type { Config } from './config.ts';
 import type { Poster } from './delivery.ts';
 import type { SessionManifest } from './manifest.ts';
 import { RecordingSession, type Logger } from './recording-session.ts';
-import type {
-    ManualOutcome,
-    ReportCoordinator,
-    ReportSelection,
-} from './report/coordinator.ts';
+import type { ManualOutcome, ReportCoordinator } from './report/coordinator.ts';
 import {
     PeriodError,
-    parseRange,
-    resolvePeriod,
-    type PeriodChoice,
+    parseSelection,
+    type ReportSelection,
 } from './report/period.ts';
 import { watchVoiceTraffic } from './voice-debug.ts';
 
@@ -298,7 +293,15 @@ export class ProceedingsBot {
         }
         let selection: ReportSelection;
         try {
-            selection = this.#parseSelection(interaction);
+            selection = parseSelection(
+                {
+                    period: interaction.options.getString(PERIOD_OPTION),
+                    from: interaction.options.getString(FROM_OPTION),
+                    to: interaction.options.getString(TO_OPTION),
+                },
+                new Date(),
+                this.#reportTimeZone()
+            );
         } catch (error) {
             if (!(error instanceof PeriodError)) throw error;
             await this.#replyPrivately(interaction, error.message);
@@ -313,40 +316,6 @@ export class ProceedingsBot {
             selection,
         });
         await interaction.editReply(reportReply(outcome));
-    }
-
-    #parseSelection(
-        interaction: ChatInputCommandInteraction<'cached'>
-    ): ReportSelection {
-        const period = interaction.options.getString(PERIOD_OPTION);
-        const from = interaction.options.getString(FROM_OPTION);
-        const to = interaction.options.getString(TO_OPTION);
-        if (period !== null && (from !== null || to !== null)) {
-            throw new PeriodError(
-                'period と from / to は同時に指定できません。'
-            );
-        }
-        if (from === null && to !== null) {
-            throw new PeriodError('to を使うときは from も指定してください。');
-        }
-        const timeZone = this.#reportTimeZone();
-        if (from !== null) {
-            return {
-                kind: 'range',
-                range: parseRange(from, to, new Date(), timeZone),
-            };
-        }
-        if (period === null || period === 'pending') {
-            return { kind: 'pending' };
-        }
-        return {
-            kind: 'range',
-            range: resolvePeriod(
-                period as Exclude<PeriodChoice, 'pending'>,
-                new Date(),
-                timeZone
-            ),
-        };
     }
 
     #reportTimeZone(): string {
@@ -534,6 +503,8 @@ function reportReply(outcome: ManualOutcome): string {
             return 'このサーバーの議事録ページを生成中です。終わってからもう一度実行してください。';
         case 'empty':
             return '対象になる録音がありません。';
+        case 'waiting':
+            return `⏳ 文字起こし中の録音が ${outcome.transcribing} 件あるので、終わるのを待ってから録音 ${outcome.sessionCount} 件の議事録ページを作ります。できたらこのチャンネルに投稿します。`;
         case 'accepted':
             return `📄 録音 ${outcome.sessionCount} 件の議事録ページを作り始めました。できたらこのチャンネルに投稿します(数十分かかります)。`;
     }
