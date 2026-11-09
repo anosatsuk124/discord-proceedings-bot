@@ -1,9 +1,14 @@
 import { readAsset } from '../report/assets.ts';
 import { escapeHtml as e, fillTemplate } from '../report/shared.ts';
-import type { Line, SessionMeta, Transcript } from './transcript.ts';
+import type { Line, Transcript } from './transcript.ts';
 import type {
+    ConversationMap,
+    Debate,
     LineCorrection,
+    MoveKind,
+    OutcomeStatus,
     Outline,
+    Phase,
     Point,
     Source,
     SourceKind,
@@ -41,6 +46,8 @@ export interface CompileInput {
     readonly corrections: ReadonlyMap<string, LineCorrection>;
     /** 校正できなかった行。ページに「未校正」と出す。 */
     readonly uncorrected: ReadonlySet<string>;
+    /** 作れなかったときは null。論点のカードだけを出す。 */
+    readonly map: ConversationMap | null;
 }
 
 /** インライン JS の上限(バイト)。 */
@@ -49,7 +56,27 @@ const MAX_INLINE_JS = 8 * 1024;
 const MAX_HTML_BYTES = 25 * 1024 * 1024;
 const TURN_GAP_MS = 12_000;
 const MAX_TURN_LINES = 20;
-const AXIS_BUCKETS = 160;
+/** CSS の .c0〜.c5 の数。話者の名前の色に使う。 */
+const SPEAKER_COLORS = 6;
+/** これより短いターンは、区切りごとに改行せず続けて見せる。 */
+const SHORT_TURN_CHARS = 16;
+
+const MOVE_LABELS: Record<MoveKind, string> = {
+    claim: '主張',
+    reason: '理由',
+    example: '例',
+    objection: '反論',
+    reply: '応答',
+    question: '問い返し',
+    concession: '譲歩',
+};
+
+const OUTCOME_LABELS: Record<OutcomeStatus, string> = {
+    agreed: '合意',
+    partial: '一部合意',
+    unresolved: '未決着',
+    shifted: '決着せず次の話へ',
+};
 
 const SOURCE_KIND_LABELS: Record<SourceKind, string> = {
     paper: '論文',
@@ -73,7 +100,6 @@ export function compileReport(
         masthead: context.masthead(),
         speakers: context.speakerList(),
         toc: context.toc(),
-        axis: context.axis(),
         summary: context.summary(),
         map: context.map(),
         transcript: context.transcriptBody(),
@@ -122,20 +148,6 @@ export function assertSelfContained(
     }
 }
 
-const KANJI_DIGITS = '〇一二三四五六七八九';
-
-/** 99 までの数を漢数字にする。 */
-function kanji(n: number): string {
-    if (n < 10) return KANJI_DIGITS[n] ?? String(n);
-    const tens = Math.floor(n / 10);
-    const ones = n % 10;
-    return (
-        (tens === 1 ? '' : (KANJI_DIGITS[tens] ?? '')) +
-        '十' +
-        (ones === 0 ? '' : (KANJI_DIGITS[ones] ?? ''))
-    );
-}
-
 interface Turn {
     readonly id: string;
     readonly speaker: string;
@@ -180,17 +192,24 @@ class CompileContext {
         return this.#time.format(date);
     }
 
+    /** 同じ分の参照は見分けが付かないので、分ごとに最初の 1 件だけ残す。 */
     #refs(refs: readonly string[]): string {
         const { byId } = this.#input.transcript;
+        const seen = new Set<string>();
         return refs
             .flatMap((id) => {
                 const line = byId.get(id);
                 if (line === undefined) return [];
-                return [
-                    `<a class="ref" href="#${e(id)}">${e(this.#clock(line.at))}</a>`,
-                ];
+                const label = this.#clock(line.at);
+                if (seen.has(label)) return [];
+                seen.add(label);
+                return [`<a class="ref" href="#${e(id)}">${e(label)}</a>`];
             })
             .join(' ');
+    }
+
+    #speakerClass(name: string): string {
+        return `c${(this.#speakerIndex.get(name) ?? 0) % SPEAKER_COLORS}`;
     }
 
     #point(point: Point): string {
@@ -206,9 +225,8 @@ class CompileContext {
         const endedAt = lines.at(-1)?.at ?? last?.endedAt ?? startedAt;
         const dateText = this.#dateLine.format(startedAt);
         const endDate = this.#dateLine.format(endedAt);
-        return `<p class="dateline"><time datetime="${e(startedAt.toISOString())}">${e(dateText)} ${e(this.#clock(startedAt))}</time>–<time datetime="${e(endedAt.toISOString())}">${endDate === dateText ? '' : `${e(endDate)} `}${e(this.#clock(endedAt))}</time></p>
-<h1>${e(outline.title)}</h1>
-<p class="lede">${e(outline.lede)}</p>
+        return `<h1>${e(outline.title)}</h1>
+<p class="dateline"><time datetime="${e(startedAt.toISOString())}">${e(dateText)} ${e(this.#clock(startedAt))}</time>–<time datetime="${e(endedAt.toISOString())}">${endDate === dateText ? '' : `${e(endDate)} `}${e(this.#clock(endedAt))}</time></p>
 <dl class="facts">
 <div><dt>サーバー</dt><dd>${e(guildName ?? '不明')}</dd></div>
 <div><dt>対象</dt><dd>${e(periodLabel)}(録音 ${transcript.sessions.length} 件)</dd></div>
@@ -219,95 +237,151 @@ class CompileContext {
 
     speakerList(): string {
         return this.#input.transcript.participants
-            .map((name, i) => `<li data-s="${i}">${e(name)}</li>`)
+            .map(
+                (name, i) =>
+                    `<li><button type="button" class="${this.#speakerClass(name)}" data-s="${i}">${e(name)}</button></li>`
+            )
             .join('');
     }
 
     toc(): string {
         const items = this.#input.outline.chapters.map((chapter, i) => {
             const line = this.#chapterLines[i]?.[0];
-            return `<li><a href="#ch-${i + 1}"><span>第${kanji(i + 1)}章</span> ${e(chapter.title)}</a>${line ? ` <time datetime="${e(line.iso)}">${e(this.#clock(line.at))}</time>` : ''}</li>`;
+            return `<li>${line ? `<time datetime="${e(line.iso)}">${e(this.#clock(line.at))}</time> ` : ''}<a href="#ch-${i + 1}">${e(chapter.title)}</a></li>`;
         });
         return `<ol>${items.join('')}</ol>`;
     }
 
-    /** 時間軸の図。時間の位置ごとの発言の量と章の区切りを、ビルド時に SVG にする。 */
-    axis(): string {
-        const { lines, sessions, participants } = this.#input.transcript;
-        const totalMs = sessionDurations(lines, sessions).total;
-        if (totalMs <= 0) return '';
-        const offsetOf = timelineOffset(lines, sessions);
-        const speakers = Math.min(participants.length, 4);
-        const buckets = Array.from({ length: AXIS_BUCKETS }, () =>
-            new Array<number>(speakers).fill(0)
-        );
-        const bucketOf = (line: Line): number =>
-            Math.min(
-                AXIS_BUCKETS - 1,
-                Math.floor((offsetOf(line) / totalMs) * AXIS_BUCKETS)
-            );
-        for (const line of lines) {
-            const s = this.#speakerIndex.get(line.speaker) ?? 0;
-            const row = buckets[bucketOf(line)];
-            if (row !== undefined) row[Math.min(s, speakers - 1)]! += 1;
-        }
-        const peak = Math.max(
-            1,
-            ...buckets.map((row) => row.reduce((a, b) => a + b, 0))
-        );
-        const rects = buckets
-            .flatMap((row, y) => {
-                let x = 0;
-                return row.flatMap((count, s) => {
-                    if (count === 0) return [];
-                    const width = (count / peak) * 40;
-                    const rect = `<rect class="s${s}" x="${x.toFixed(1)}" y="${y}" width="${width.toFixed(1)}" height="1"/>`;
-                    x += width;
-                    return [rect];
-                });
-            })
-            .join('');
-        const ticks = this.#input.outline.chapters
-            .map((chapter, i) => {
-                const first = this.#chapterLines[i]?.[0];
-                if (first === undefined) return '';
-                const y = (offsetOf(first) / totalMs) * AXIS_BUCKETS;
-                return `<a href="#ch-${i + 1}"><title>第${kanji(i + 1)}章 ${e(chapter.title)}</title><line x1="0" x2="48" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}"/><rect class="hit" x="0" y="${y.toFixed(1)}" width="48" height="4"/></a>`;
-            })
-            .join('');
-        return `<svg viewBox="0 0 48 ${AXIS_BUCKETS}" width="48" height="160" preserveAspectRatio="none" role="img" aria-label="会話の時間軸。章をクリックすると移動します">${rects}${ticks}<rect id="axis-now" x="0" y="0" width="48" height="1"/></svg>`;
-    }
-
     summary(): string {
         const { outline } = this.#input;
-        const section = (heading: string, points: readonly Point[]): string =>
+        const card = (heading: string, points: readonly Point[]): string =>
             points.length === 0
                 ? ''
-                : `<h3>${heading}</h3><ul>${points.map((p) => this.#point(p)).join('')}</ul>`;
-        return (
-            section('主な内容', outline.key_points) +
-            section('決まったこと', outline.decisions) +
-            section('残った問い', outline.open_questions)
-        );
+                : `<section class="card"><h3>${heading}</h3><ul>${points.map((p) => this.#point(p)).join('')}</ul></section>`;
+        const pair =
+            card('決まったこと', outline.decisions) +
+            card('残った問い', outline.open_questions);
+        return `<div class="cards">
+<section class="card"><h3>概要</h3><p>${e(outline.lede)}</p></section>
+${card('主な内容', outline.key_points)}
+${pair === '' ? '' : `<div class="cards pair">${pair}</div>`}
+</div>`;
     }
 
     map(): string {
+        const { map } = this.#input;
+        return map === null ? this.#threads() : this.#conversationMap(map);
+    }
+
+    #conversationMap(map: ConversationMap): string {
+        const through =
+            map.through_line === null
+                ? ''
+                : `<section class="card"><h3>会話を貫く問い</h3><p>${e(map.through_line)}</p></section>`;
+        const debates = map.debates.map((d) => this.#debate(d)).join('\n');
+        return `${through}
+<h3>全体の流れ</h3>
+<ol class="phases">
+${map.phases.map((p) => this.#phase(p, map.debates)).join('\n')}
+</ol>
+${debates === '' ? '' : `<h3>議論図</h3>\n${debates}`}`;
+    }
+
+    #phase(phase: Phase, debates: readonly Debate[]): string {
+        const first = this.#chapterLines[phase.first_chapter - 1]?.[0];
+        const last = this.#chapterLines[phase.last_chapter - 1]?.at(-1);
+        const range =
+            first === undefined || last === undefined
+                ? ''
+                : `<p class="dateline"><time datetime="${e(first.iso)}">${e(this.#clock(first.at))}</time>–<time datetime="${e(last.iso)}">${e(this.#clock(last.at))}</time></p>`;
+        const chapters = this.#input.outline.chapters.flatMap((chapter, i) =>
+            i + 1 >= phase.first_chapter && i + 1 <= phase.last_chapter
+                ? [`<a href="#ch-${i + 1}">${e(chapter.title)}</a>`]
+                : []
+        );
+        const related = debates.flatMap((debate) => {
+            const start = Math.min(...debate.chapters);
+            return start >= phase.first_chapter && start <= phase.last_chapter
+                ? [debateLink(debate)]
+                : [];
+        });
+        const fact = (label: string, items: readonly string[]): string =>
+            items.length === 0
+                ? ''
+                : `<div><dt>${label}</dt><dd>${items.join(' / ')}</dd></div>`;
+        const transition =
+            phase.transition === null
+                ? ''
+                : `<p class="transition"><span aria-hidden="true">↓</span> ${e(phase.transition)}</p>`;
+        return `<li>
+<section class="card">
+${range}
+<h4>${e(phase.title)}</h4>
+<p>${e(phase.summary)}</p>
+<dl class="phase-facts">${fact('話題', phase.keywords.map(e))}${fact('章', chapters)}${fact('議論図', related)}</dl>
+</section>
+${transition}
+</li>`;
+    }
+
+    #debate(debate: Debate): string {
+        const branches = debate.branches
+            .map(
+                (branch) => `<section class="branch">
+<h5>${e(branch.stance)}</h5>
+<ol class="moves">
+${branch.moves
+    .map(
+        (move) =>
+            `<li><p class="move-meta"><span class="kind">${MOVE_LABELS[move.kind]}</span> <b class="${this.#speakerClass(move.speaker)}">${e(move.speaker)}</b> ${this.#refs(move.refs)}</p><p>${e(move.text)}</p></li>`
+    )
+    .join('\n')}
+</ol>
+</section>`
+            )
+            .join('\n');
+        const titles = new Map(
+            (this.#input.map?.debates ?? []).map((d) => [d.id, d.title])
+        );
+        const links = debate.links
+            .map(
+                (link) =>
+                    `<li><a href="#${e(link.to)}">${e(titles.get(link.to) ?? link.to)}</a>: ${e(link.text)}</li>`
+            )
+            .join('');
+        return `<section class="debate" id="${e(debate.id)}">
+<div class="card">
+<h4>${e(debate.title)}</h4>
+<p>${e(debate.question)}</p>
+</div>
+<div class="branches" data-n="${debate.branches.length}">
+${branches}
+</div>
+<div class="card">
+<p><b>${OUTCOME_LABELS[debate.outcome.status]}</b> ${e(debate.outcome.text)} ${this.#refs(debate.outcome.refs)}</p>
+${links === '' ? '' : `<ul class="debate-links">${links}</ul>`}
+</div>
+</section>`;
+    }
+
+    #threads(): string {
         const { threads } = this.#input.outline;
         if (threads.length === 0) return '<p>まとめる論点はありません。</p>';
-        return threads
+        const cards = threads
             .map(
-                (thread) => `<section class="thread">
+                (thread) => `<section class="card thread">
 <h3>${e(thread.topic)}</h3>
 <p class="question">${e(thread.question)}</p>
 <dl>${thread.positions
                     .map(
                         (p) =>
-                            `<dt>${e(p.speaker)}</dt><dd>${e(p.text)} ${this.#refs(p.refs)}</dd>`
+                            `<dt class="${this.#speakerClass(p.speaker)}">${e(p.speaker)}</dt><dd>${e(p.text)} ${this.#refs(p.refs)}</dd>`
                     )
                     .join('')}</dl>
 </section>`
             )
             .join('\n');
+        return `<div class="cards">${cards}</div>`;
     }
 
     transcriptBody(): string {
@@ -325,17 +399,17 @@ class CompileContext {
                     chapter.flow.length === 0
                         ? ''
                         : `<ul class="flow">${chapter.flow
-                              .map(
-                                  (f) =>
-                                      `<li><b>${e(f.label)}</b> ${e(f.text)}</li>`
-                              )
+                              .map((f) => `<li>${e(f.text)}</li>`)
                               .join('')}</ul>`;
                 return `<section id="ch-${number}">
-<h3><span>第${kanji(number)}章</span> ${e(chapter.title)}</h3>
+<h3>${e(chapter.title)}</h3>
+<div class="card">
 <p>${e(chapter.summary)}</p>
 ${flow}
 <p class="point"><b>論点</b> ${e(chapter.point)}</p>
+${this.#chapterDebates(number)}
 ${this.#chapterSources(number)}
+</div>
 <ol class="log">
 ${turns.map((turn) => this.#turn(turn)).join('\n')}
 </ol>
@@ -381,6 +455,12 @@ ${turns.map((turn) => this.#turn(turn)).join('\n')}
         const first = turn.lines[0];
         if (first === undefined) return '';
         const speakerIndex = this.#speakerIndex.get(turn.speaker) ?? 0;
+        const spoken = turn.lines
+            .filter((l) => corrections.get(l.id)?.kind !== 'drop')
+            .map((l) => corrections.get(l.id)?.text ?? l.raw)
+            .join('');
+        const sayClass =
+            spoken.length <= SHORT_TURN_CHARS ? 'say short' : 'say';
         const kept = turn.lines.filter(
             (l) => corrections.get(l.id)?.kind !== 'drop'
         );
@@ -397,9 +477,9 @@ ${turns.map((turn) => this.#turn(turn)).join('\n')}
                 ? ''
                 : `<details class="dropped"><summary>誤認識の疑い ${dropped.length} 行</summary><p>${dropped.map((l) => `<span id="${e(l.id)}">${e(l.raw)}</span>`).join(' ／ ')}</p></details>`;
         const unchecked = turn.lines.some((l) => uncorrected.has(l.id))
-            ? ' <small>(未校正)</small>'
+            ? '<small>(未校正)</small>'
             : '';
-        return `<li id="${turn.id}" data-s="${speakerIndex}"><p class="who"><a href="#${turn.id}"><time datetime="${e(first.iso)}">${e(this.#clock(first.at))}</time></a> <b>${e(turn.speaker)}</b>${unchecked}</p>${say === '' ? '' : `<p class="say">${say}</p>`}${original}${droppedNote}</li>`;
+        return `<li id="${turn.id}" data-s="${speakerIndex}"><p class="who"><a href="#${turn.id}"><time datetime="${e(first.iso)}">${e(this.#clock(first.at))}</time></a> <b class="${this.#speakerClass(turn.speaker)}">${e(turn.speaker)}${unchecked}</b></p>${say === '' ? '' : `<p class="${sayClass}">${say}</p>`}${original}${droppedNote}</li>`;
     }
 
     #lineSpan(line: Line): string {
@@ -412,6 +492,15 @@ ${turns.map((turn) => this.#turn(turn)).join('\n')}
             return `<span id="${id}"><ins>${e(correction.text)}</ins><small>(補完)</small></span>`;
         }
         return `<span id="${id}">${e(correction.text)}</span>`;
+    }
+
+    #chapterDebates(chapter: number): string {
+        const related = (this.#input.map?.debates ?? []).filter((d) =>
+            d.chapters.includes(chapter)
+        );
+        return related.length === 0
+            ? ''
+            : `<p class="point"><b>議論図</b> ${related.map(debateLink).join(' / ')}</p>`;
     }
 
     #chapterSources(chapter: number): string {
@@ -443,6 +532,10 @@ ${turns.map((turn) => this.#turn(turn)).join('\n')}
     }
 }
 
+function debateLink(debate: Debate): string {
+    return `<a href="#${e(debate.id)}">${e(debate.title)}</a>`;
+}
+
 function uniqueByUrl(sources: readonly Source[]): Source[] {
     const seen = new Set<string>();
     return sources.filter((s) => {
@@ -455,45 +548,4 @@ function uniqueByUrl(sources: readonly Source[]): Source[] {
 function renderSource(source: Source): string {
     const domain = new URL(source.url).hostname;
     return `<li><a href="${e(source.url)}" rel="noopener noreferrer nofollow" target="_blank">${e(source.title)}</a> <span class="domain">${e(domain)}・${SOURCE_KIND_LABELS[source.kind]}</span><p>${e(source.summary)}</p><p class="relevance">${e(source.relevance)}</p></li>`;
-}
-
-/** 録音ごとの長さの合計(録音と録音のあいだの空白は詰める)。 */
-function sessionDurations(
-    lines: readonly Line[],
-    sessions: readonly SessionMeta[]
-): {
-    readonly spans: ReadonlyMap<number, readonly [number, number]>;
-    readonly total: number;
-} {
-    const spans = new Map<number, readonly [number, number]>();
-    for (const session of sessions) {
-        const own = lines.filter((l) => l.session === session.index);
-        const first = own[0];
-        const last = own.at(-1);
-        if (first !== undefined && last !== undefined) {
-            spans.set(session.index, [first.at.getTime(), last.at.getTime()]);
-        }
-    }
-    let total = 0;
-    for (const [start, end] of spans.values())
-        total += Math.max(end - start, 1);
-    return { spans, total };
-}
-
-function timelineOffset(
-    lines: readonly Line[],
-    sessions: readonly SessionMeta[]
-): (line: Line) => number {
-    const { spans } = sessionDurations(lines, sessions);
-    const baseOf = new Map<number, number>();
-    let base = 0;
-    for (const [index, [start, end]] of spans) {
-        baseOf.set(index, base);
-        base += Math.max(end - start, 1);
-    }
-    return (line) => {
-        const span = spans.get(line.session);
-        if (span === undefined) return 0;
-        return (baseOf.get(line.session) ?? 0) + (line.at.getTime() - span[0]);
-    };
 }

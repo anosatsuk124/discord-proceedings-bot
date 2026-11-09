@@ -97,13 +97,13 @@
         clearTimeout(timer);
         timer = setTimeout(apply, 150);
     });
-    for (const li of $$('#speakers li')) {
-        li.setAttribute('aria-pressed', 'true');
-        li.addEventListener('click', () => {
-            const on = li.getAttribute('aria-pressed') !== 'true';
-            li.setAttribute('aria-pressed', String(on));
-            if (on) muted.delete(li.dataset.s);
-            else muted.add(li.dataset.s);
+    for (const button of $$('#speakers button')) {
+        button.setAttribute('aria-pressed', 'true');
+        button.addEventListener('click', () => {
+            const on = button.getAttribute('aria-pressed') !== 'true';
+            button.setAttribute('aria-pressed', String(on));
+            if (on) muted.delete(button.dataset.s);
+            else muted.add(button.dataset.s);
             apply();
         });
     }
@@ -132,19 +132,11 @@
         }
     });
 
-    // 時間軸と目次に現在の位置を出す。
-    const now = $('#axis-now');
+    // 目次に現在の章を出す。
     const links = $$('#toc ol a');
-    const main = $('#transcript');
     let pending = false;
     const track = () => {
         pending = false;
-        const span = main.offsetHeight - innerHeight;
-        const ratio = Math.min(
-            1,
-            Math.max(0, (scrollY - main.offsetTop) / span)
-        );
-        if (now) now.setAttribute('y', String(ratio * 159));
         const y = scrollY + 80;
         let current = -1;
         chapters.forEach((c, i) => {

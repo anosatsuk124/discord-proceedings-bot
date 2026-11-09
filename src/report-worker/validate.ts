@@ -1,12 +1,23 @@
 import type { Chunk, Line, Transcript } from './transcript.ts';
 import {
+    MOVE_KINDS,
+    OUTCOME_STATUSES,
     SOURCE_KINDS,
+    type Branch,
     type Chapter,
+    type ConversationMap,
     type CorrectionResult,
+    type Debate,
+    type DebateLink,
     type FlowStep,
     type GlossaryItem,
     type LineCorrection,
+    type Move,
+    type MoveKind,
+    type Outcome,
+    type OutcomeStatus,
     type Outline,
+    type Phase,
     type Point,
     type Position,
     type ResearchResult,
@@ -76,10 +87,11 @@ class Reader {
     refs(
         value: unknown,
         path: string,
-        byId: ReadonlyMap<string, Line>
+        byId: ReadonlyMap<string, Line>,
+        max = 8
     ): string[] {
         const refs: string[] = [];
-        this.array(value, path, 8).forEach((id, i) => {
+        this.array(value, path, max).forEach((id, i) => {
             if (typeof id !== 'string' || !byId.has(id)) {
                 this.fail(`${path}[${i}]`, `存在しない行です: ${String(id)}`);
             } else {
@@ -112,6 +124,32 @@ class Reader {
         return this.array(value, path, max).map((v, i) =>
             this.point(v, `${path}[${i}]`, byId)
         );
+    }
+
+    speaker(
+        value: unknown,
+        path: string,
+        participants: readonly string[]
+    ): string {
+        const speaker = this.string(value, path, 80);
+        if (speaker !== '' && !participants.includes(speaker)) {
+            this.fail(path, `参加者の名前にしてください: ${speaker}`);
+        }
+        return speaker;
+    }
+
+    /** 1 から count までの章番号。範囲外なら null。 */
+    chapter(value: unknown, path: string, count: number): number | null {
+        if (
+            typeof value !== 'number' ||
+            !Number.isInteger(value) ||
+            value < 1 ||
+            value > count
+        ) {
+            this.fail(path, `章番号が範囲外です: ${String(value)}`);
+            return null;
+        }
+        return value;
     }
 
     result<T>(value: T): Validation<T> {
@@ -267,19 +305,12 @@ function readThread(
         .array(t['positions'], `${path}.positions`, 8)
         .map((v, i): Position => {
             const p = r.object(v, `${path}.positions[${i}]`);
-            const speaker = r.string(
-                p['speaker'],
-                `${path}.positions[${i}].speaker`,
-                80
-            );
-            if (speaker !== '' && !participants.includes(speaker)) {
-                r.fail(
-                    `${path}.positions[${i}].speaker`,
-                    `参加者の名前にしてください: ${speaker}`
-                );
-            }
             return {
-                speaker,
+                speaker: r.speaker(
+                    p['speaker'],
+                    `${path}.positions[${i}].speaker`,
+                    participants
+                ),
                 text: r.string(p['text'], `${path}.positions[${i}].text`, 300),
                 refs: r.refs(p['refs'], `${path}.positions[${i}].refs`, byId),
             };
@@ -310,19 +341,12 @@ function readResearchTopics(
             const chapters = r
                 .array(t['chapters'], `${path}.chapters`, 10)
                 .flatMap((n, j): number[] => {
-                    if (
-                        typeof n !== 'number' ||
-                        !Number.isInteger(n) ||
-                        n < 1 ||
-                        n > chapterCount
-                    ) {
-                        r.fail(
-                            `${path}.chapters[${j}]`,
-                            `章番号が範囲外です: ${String(n)}`
-                        );
-                        return [];
-                    }
-                    return [n];
+                    const chapter = r.chapter(
+                        n,
+                        `${path}.chapters[${j}]`,
+                        chapterCount
+                    );
+                    return chapter === null ? [] : [chapter];
                 });
             return {
                 id: r.string(t['id'], `${path}.id`, 20),
@@ -393,6 +417,245 @@ export function isSafeSourceUrl(url: string): boolean {
     } catch {
         return false;
     }
+}
+
+export interface MapContext {
+    readonly transcript: Pick<Transcript, 'byId' | 'participants'>;
+    readonly chapterCount: number;
+}
+
+const MAX_MOVE_REFS = 4;
+
+export function validateMap(
+    value: unknown,
+    context: MapContext
+): Validation<ConversationMap> {
+    const r = new Reader();
+    const o = r.object(value, '$');
+    const throughLine = o['through_line'];
+    const phases = r
+        .array(o['phases'], '$.phases', 8)
+        .map((v, i) => readPhase(r, v, `$.phases[${i}]`, context.chapterCount));
+    checkPhaseContinuity(r, phases, context.chapterCount);
+    const debates = r
+        .array(o['debates'], '$.debates', 20)
+        .map((v, i) => readDebate(r, v, `$.debates[${i}]`, context));
+    checkDebateLinks(r, debates);
+    return r.result({
+        through_line:
+            throughLine === null
+                ? null
+                : r.string(throughLine, '$.through_line', 240),
+        phases,
+        debates,
+    });
+}
+
+function readPhase(
+    r: Reader,
+    value: unknown,
+    path: string,
+    chapterCount: number
+): Phase {
+    const p = r.object(value, path);
+    const keywords = r
+        .array(p['keywords'], `${path}.keywords`, 6)
+        .map((k, i) => r.string(k, `${path}.keywords[${i}]`, 30));
+    if (keywords.length === 0) {
+        r.fail(`${path}.keywords`, '1 つ以上書いてください');
+    }
+    return {
+        title: r.string(p['title'], `${path}.title`, 40),
+        first_chapter:
+            r.chapter(
+                p['first_chapter'],
+                `${path}.first_chapter`,
+                chapterCount
+            ) ?? 0,
+        last_chapter:
+            r.chapter(
+                p['last_chapter'],
+                `${path}.last_chapter`,
+                chapterCount
+            ) ?? 0,
+        summary: r.string(p['summary'], `${path}.summary`, 400),
+        keywords,
+        transition:
+            p['transition'] === null
+                ? null
+                : r.string(p['transition'], `${path}.transition`, 160),
+    };
+}
+
+/** 局面が全章を隙間なく覆い、最後の局面だけ transition が null であることを確かめる。 */
+function checkPhaseContinuity(
+    r: Reader,
+    phases: readonly Phase[],
+    chapterCount: number
+): void {
+    if (phases.length === 0) {
+        r.fail('$.phases', '局面を 1 つ以上書いてください');
+        return;
+    }
+    let expected = 1;
+    phases.forEach((phase, i) => {
+        const path = `$.phases[${i}]`;
+        if (phase.first_chapter !== expected) {
+            r.fail(`${path}.first_chapter`, `${expected} にしてください`);
+        }
+        if (phase.last_chapter < phase.first_chapter) {
+            r.fail(`${path}.last_chapter`, 'first_chapter 以上にしてください');
+        }
+        const isLast = i === phases.length - 1;
+        if (isLast && phase.transition !== null) {
+            r.fail(`${path}.transition`, '最後の局面は null にしてください');
+        }
+        if (!isLast && phase.transition === null) {
+            r.fail(
+                `${path}.transition`,
+                '次の局面へのきっかけを書いてください'
+            );
+        }
+        expected = phase.last_chapter + 1;
+    });
+    if (phases.at(-1)?.last_chapter !== chapterCount) {
+        r.fail('$.phases', `最後の局面は ${chapterCount} 章で終えてください`);
+    }
+}
+
+function readDebate(
+    r: Reader,
+    value: unknown,
+    path: string,
+    context: MapContext
+): Debate {
+    const { byId, participants } = context.transcript;
+    const d = r.object(value, path);
+    const chapters = r
+        .array(d['chapters'], `${path}.chapters`, 10)
+        .flatMap((n, i): number[] => {
+            const chapter = r.chapter(
+                n,
+                `${path}.chapters[${i}]`,
+                context.chapterCount
+            );
+            return chapter === null ? [] : [chapter];
+        });
+    if (chapters.length === 0) {
+        r.fail(`${path}.chapters`, '関連する章を 1 つ以上書いてください');
+    }
+    const branches = r
+        .array(d['branches'], `${path}.branches`, 3)
+        .map((v, i): Branch => {
+            const branchPath = `${path}.branches[${i}]`;
+            const b = r.object(v, branchPath);
+            const moves = r
+                .array(b['moves'], `${branchPath}.moves`, 10)
+                .map((m, j) =>
+                    readMove(
+                        r,
+                        m,
+                        `${branchPath}.moves[${j}]`,
+                        byId,
+                        participants
+                    )
+                );
+            if (moves.length === 0) {
+                r.fail(`${branchPath}.moves`, '1 つ以上書いてください');
+            }
+            return {
+                stance: r.string(b['stance'], `${branchPath}.stance`, 40),
+                moves,
+            };
+        });
+    if (branches.length === 0) {
+        r.fail(`${path}.branches`, '枝を 1 つ以上書いてください');
+    }
+    return {
+        id: r.string(d['id'], `${path}.id`, 10),
+        title: r.string(d['title'], `${path}.title`, 40),
+        question: r.string(d['question'], `${path}.question`, 160),
+        chapters,
+        branches,
+        outcome: readOutcome(r, d['outcome'], `${path}.outcome`, byId),
+        links: r
+            .array(d['links'], `${path}.links`, 3)
+            .map((v, i): DebateLink => {
+                const l = r.object(v, `${path}.links[${i}]`);
+                return {
+                    to: r.string(l['to'], `${path}.links[${i}].to`, 10),
+                    text: r.string(l['text'], `${path}.links[${i}].text`, 120),
+                };
+            }),
+    };
+}
+
+function readMove(
+    r: Reader,
+    value: unknown,
+    path: string,
+    byId: ReadonlyMap<string, Line>,
+    participants: readonly string[]
+): Move {
+    const m = r.object(value, path);
+    const kind = m['kind'];
+    if (!MOVE_KINDS.includes(kind as MoveKind)) {
+        r.fail(
+            `${path}.kind`,
+            `${MOVE_KINDS.join('/')} のどれかにしてください`
+        );
+    }
+    return {
+        kind: kind as MoveKind,
+        speaker: r.speaker(m['speaker'], `${path}.speaker`, participants),
+        text: r.string(m['text'], `${path}.text`, 140),
+        refs: r.refs(m['refs'], `${path}.refs`, byId, MAX_MOVE_REFS),
+    };
+}
+
+function readOutcome(
+    r: Reader,
+    value: unknown,
+    path: string,
+    byId: ReadonlyMap<string, Line>
+): Outcome {
+    const o = r.object(value, path);
+    const status = o['status'];
+    if (!OUTCOME_STATUSES.includes(status as OutcomeStatus)) {
+        r.fail(
+            `${path}.status`,
+            `${OUTCOME_STATUSES.join('/')} のどれかにしてください`
+        );
+    }
+    return {
+        status: status as OutcomeStatus,
+        text: r.string(o['text'], `${path}.text`, 240),
+        refs: r.refs(o['refs'], `${path}.refs`, byId, MAX_MOVE_REFS),
+    };
+}
+
+/** id はページ内のアンカーになるので、形と重複を確かめる。 */
+function checkDebateLinks(r: Reader, debates: readonly Debate[]): void {
+    const seen = new Set<string>();
+    debates.forEach((debate, i) => {
+        if (debate.id !== '' && !/^d[0-9]+$/.test(debate.id)) {
+            r.fail(`$.debates[${i}].id`, 'd1, d2, ... の形にしてください');
+        }
+        if (seen.has(debate.id)) {
+            r.fail(`$.debates[${i}].id`, `重複しています: ${debate.id}`);
+        }
+        seen.add(debate.id);
+    });
+    debates.forEach((debate, i) => {
+        debate.links.forEach((link, j) => {
+            if (!seen.has(link.to) || link.to === debate.id) {
+                r.fail(
+                    `$.debates[${i}].links[${j}].to`,
+                    `ほかの議論図の id にしてください: ${link.to}`
+                );
+            }
+        });
+    });
 }
 
 /** 長さの比較に使う上限。短い行は増える余地を多めに見る。 */

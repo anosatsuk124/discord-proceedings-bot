@@ -30,7 +30,7 @@ Bob,2026-11-06T21:00:15+09:00,<script>alert(1)</script>
 const OUTLINE = {
     title: '画面共有の相談',
     lede: 'Aliceが画面共有について尋ねる。',
-    key_points: [{ text: '共有を始めた', refs: ['l1'] }],
+    key_points: [{ text: '共有を始めた', refs: ['l1', 'l2'] }],
     decisions: [],
     open_questions: [],
     chapters: [
@@ -47,6 +47,43 @@ const OUTLINE = {
     glossary: [{ term: '画面共有', heard: ['画面距離'], note: '機能' }],
     research_topics: [
         { id: 'r1', query: '画面共有', question: '仕組みは?', chapters: [1] },
+    ],
+};
+
+const MAP = {
+    through_line: null,
+    phases: [
+        {
+            title: '共有の相談',
+            first_chapter: 1,
+            last_chapter: 1,
+            summary: '画面共有を始める。',
+            keywords: ['画面共有'],
+            transition: null,
+        },
+    ],
+    debates: [
+        {
+            id: 'd1',
+            title: '画面共有でよいか',
+            question: '共有の方法はこれでよいか。',
+            chapters: [1],
+            branches: [
+                {
+                    stance: 'よい',
+                    moves: [
+                        {
+                            kind: 'claim',
+                            speaker: 'Bob',
+                            text: 'このまま見ればよい。',
+                            refs: ['l4'],
+                        },
+                    ],
+                },
+            ],
+            outcome: { status: 'agreed', text: '共有で進めた。', refs: ['l1'] },
+            links: [],
+        },
     ],
 };
 
@@ -91,6 +128,7 @@ interface FakeBehaviour {
     readonly failCorrection?: boolean;
     readonly failOutline?: boolean;
     readonly failResearch?: boolean;
+    readonly failMap?: boolean;
 }
 
 function fakeRunner(
@@ -108,6 +146,10 @@ function fakeRunner(
         if (task.name === 'outline') {
             if (behaviour.failOutline) return done;
             await write(OUTLINE);
+            return done;
+        }
+        if (task.name === 'map') {
+            if (!behaviour.failMap) await write(MAP);
             return done;
         }
         if (task.name.includes('research')) {
@@ -213,18 +255,68 @@ describe('パイプライン', () => {
         // 目次と出典は普通のリンク
         assert.match(html, /<a href="#ch-1">/);
         assert.match(html, /<a class="ref" href="#l1">/);
+        // 同じ分の参照は 1 つにまとめる
+        assert.doesNotMatch(html, /<a class="ref" href="#l2">/);
+        // 要約はカードにする
+        assert.match(html, /<section class="card"><h3>主な内容<\/h3>/);
         // 話者と時刻は原データのまま
         assert.match(
             html,
             /<time datetime="2026-11-06T21:00:00\+09:00">21:00<\/time>/
         );
-        assert.match(html, /<b>Bob<\/b>/);
+        assert.match(html, /<b class="c1">Bob<\/b>/);
         // 発言はエスケープされる
         assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
         assert.doesNotMatch(html, /<script>alert/);
         // JSON を残さない
         assert.doesNotMatch(html, /application\/json/);
         assert.doesNotMatch(html, /"key_points"/);
+    });
+
+    it('議論マップは本文に埋め込み、章と発言へのリンクを持つ', async () => {
+        const { html } = await run();
+        assert.match(html, /<h3>全体の流れ<\/h3>/);
+        assert.match(html, /<section class="debate" id="d1">/);
+        assert.match(html, /<span class="kind">主張<\/span> <b class="c1">Bob/);
+        assert.match(html, /<a class="ref" href="#l4">/);
+        assert.match(html, /<b>議論図<\/b> <a href="#d1">/);
+    });
+
+    it('議論マップには校正済みの全文を渡し、誤認識の行は渡さない', async () => {
+        let transcript = '';
+        const runner: AgentRunner = async (task) => {
+            if (task.name === 'map') {
+                transcript = await readFile(
+                    path.join(task.cwd, 'transcript-01.txt'),
+                    'utf8'
+                );
+            }
+            return fakeRunner({}, calls, snapshots)(task);
+        };
+        await runPipeline({
+            jobDirectory,
+            request,
+            agentKind: 'claude',
+            runner,
+            concurrency: 1,
+            taskRoot,
+            research: {
+                enabled: true,
+                maxTopics: 5,
+                isReachable: async () => true,
+            },
+            logger: { info() {}, warn() {} },
+        });
+        assert.match(transcript, /画面共有でいい\?/);
+        assert.doesNotMatch(transcript, /画面距離/);
+        assert.doesNotMatch(transcript, /ありがとうございました/);
+    });
+
+    it('議論マップを作れなくてもページを作り、論点のカードを出す', async () => {
+        const { html, result } = await run({ failMap: true });
+        assert.deepEqual(result.warnings, ['議論マップを作れませんでした']);
+        assert.doesNotMatch(html, /<h3>全体の流れ<\/h3>/);
+        assert.match(html, /<h2>議論マップ<\/h2>/);
     });
 
     it('実際に取得した資料だけを、安全なリンクで載せる', async () => {
