@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import {
     buildAgentCommand,
     fetchedUrls,
+    inspectRun,
     normalizeUrl,
     type AgentSettings,
 } from '../src/report-worker/agent-cli.ts';
@@ -758,6 +759,110 @@ describe('CLI の起動方法', () => {
         );
         assert.equal(fetchedUrls('codex', stdout), null);
         assert.equal(normalizeUrl('nope'), null);
+    });
+});
+
+describe('CLI の実行結果の読み取り', () => {
+    const result = (fields: object): string =>
+        JSON.stringify({ type: 'result', ...fields });
+    const failure = (message: string): string =>
+        result({ is_error: true, total_cost_usd: 0, result: message });
+
+    it('費用とトークン数をモデルをまたいで合計する', () => {
+        const stdout = [
+            'not json',
+            'null',
+            result({
+                is_error: false,
+                total_cost_usd: 0.25,
+                modelUsage: {
+                    'claude-sonnet-5-5': {
+                        inputTokens: 1,
+                        outputTokens: 2,
+                        cacheReadInputTokens: 3,
+                        cacheCreationInputTokens: 4,
+                        webSearchRequests: 5,
+                    },
+                    'claude-haiku-5-5': { inputTokens: 10, outputTokens: 20 },
+                },
+            }),
+        ].join('\n');
+        assert.deepEqual(inspectRun('claude', stdout), {
+            usage: {
+                costUsd: 0.25,
+                inputTokens: 11,
+                cacheWriteTokens: 4,
+                cacheReadTokens: 3,
+                outputTokens: 22,
+                webSearches: 5,
+            },
+            quotaExhausted: false,
+        });
+    });
+
+    it('結果が出ていなければ費用は不明とする', () => {
+        assert.deepEqual(inspectRun('claude', '{"type":"assistant"}'), {
+            usage: null,
+            quotaExhausted: false,
+        });
+    });
+
+    it('費用を報告しない CLI では読み取らない', () => {
+        const stdout = failure('Credit balance is too low');
+        for (const kind of ['codex', 'opencode'] as const) {
+            assert.deepEqual(inspectRun(kind, stdout), {
+                usage: null,
+                quotaExhausted: false,
+            });
+        }
+    });
+
+    for (const message of [
+        'Credit balance is too low',
+        'Credit balance too low · Add funds: https://platform.claude.com/settings/billing',
+        'API Error: 400 You have reached your specified workspace API usage limits.',
+        'API Error: 400 You have reached your specified API usage limits.',
+        "You've hit your weekly limit · resets Mon 12:00am",
+        "You've hit your org's monthly spend limit · visit https://claude.ai/admin-settings/usage to raise it",
+    ]) {
+        it(`「${message.slice(0, 32)}」は利用枠切れ`, () => {
+            assert.equal(
+                inspectRun('claude', failure(message)).quotaExhausted,
+                true
+            );
+        });
+    }
+
+    it('CLI の billing_error は利用枠切れ', () => {
+        const stdout = JSON.stringify({
+            type: 'assistant',
+            error: 'billing_error',
+        });
+        assert.equal(inspectRun('claude', stdout).quotaExhausted, true);
+    });
+
+    it('一時的なエラーや認証のエラーは利用枠切れにしない', () => {
+        for (const message of [
+            'Invalid API key · Fix external API key',
+            'API Error: Request rejected (429) · this may be a temporary capacity issue.',
+        ]) {
+            assert.equal(
+                inspectRun('claude', failure(message)).quotaExhausted,
+                false
+            );
+        }
+    });
+
+    it('発言やモデルの出力に同じ語があっても利用枠切れにしない', () => {
+        const words = 'Credit balance is too low. You have hit your limit.';
+        const stdout = [
+            JSON.stringify({
+                type: 'assistant',
+                message: { content: [{ type: 'text', text: words }] },
+            }),
+            result({ is_error: false, total_cost_usd: 0.1, result: words }),
+        ].join('\n');
+        assert.equal(inspectRun('claude', stdout).quotaExhausted, false);
     });
 });
 

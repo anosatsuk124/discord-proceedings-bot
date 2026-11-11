@@ -295,6 +295,46 @@ describe('ReportCoordinator', () => {
         assert.deepEqual(outcome, { kind: 'accepted', sessionCount: 1 });
     });
 
+    describe('費用の記録', () => {
+        const USAGE = {
+            costUsd: 1.5,
+            costByKind: { outline: 1.5 },
+            runs: 1,
+            unreportedRuns: 0,
+            inputTokens: 1,
+            cacheWriteTokens: 2,
+            cacheReadTokens: 3,
+            outputTokens: 4,
+            webSearches: 0,
+        };
+
+        it('作成できたページの記録に残す', async () => {
+            await addSession('20261106T120000Z-aaaa', '2026-11-06T13:00:00Z');
+            const c = coordinator();
+            await c.requestManual(manual);
+            await finishJob({ ...SUCCESS, usage: USAGE });
+            await c.tick();
+            assert.equal((await records())[0]?.status, 'announced');
+            assert.deepEqual((await records())[0]?.usage, USAGE);
+        });
+
+        it('失敗したジョブの費用も残し、ページは公開しない', async () => {
+            await addSession('20261106T120000Z-aaaa', '2026-11-06T13:00:00Z');
+            const c = coordinator();
+            await c.requestManual(manual);
+            await finishJob({
+                status: 'failed',
+                error: '利用枠が足りません',
+                usage: USAGE,
+            });
+            await c.tick();
+            assert.equal((await records())[0]?.status, 'failed');
+            assert.deepEqual((await records())[0]?.usage, USAGE);
+            assert.equal(publisher.commits.length, 0);
+            assert.match(poster.posts[0]?.content ?? '', /利用枠が足りません/);
+        });
+    });
+
     describe('文字起こし中の録音があるとき', () => {
         const OLD = '20261105T120000Z-aaaa';
         const TODAY = '20261109T100000Z-bbbb';

@@ -1,14 +1,28 @@
-import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+    appendFile,
+    copyFile,
+    mkdir,
+    readFile,
+    rm,
+    writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { SKILL_DIR } from '../report/assets.ts';
-import type { JobRequest, JobSuccess } from '../report/job-files.ts';
+import {
+    JOB_WORK_DIR,
+    type JobRequest,
+    type JobSuccess,
+    type JobUsage,
+} from '../report/job-files.ts';
 import { writeJsonAtomic } from '../report/shared.ts';
 import {
     fetchedUrls,
+    inspectRun,
     normalizeUrl,
     recordsFetches,
     skillDirectory,
     type AgentKind,
+    type RunUsage,
 } from './agent-cli.ts';
 import {
     compileReport,
@@ -55,6 +69,19 @@ const MAX_ATTEMPTS = 3;
 /** これを超える長さの会話は、区間ごとに章立てする。 */
 const OUTLINE_MAX_CHARS = 180_000;
 const MAX_SOURCES_PER_TOPIC = 4;
+/** CLI を起動するたびに 1 行足す記録。再起動しても費用の合計が失われない。 */
+const USAGE_FILE = 'usage.jsonl';
+
+/** LLM の利用枠が尽きた。やり直しても進めないので、ページを作らずに中止する。 */
+export class AgentQuotaError extends Error {
+    override name = 'AgentQuotaError';
+
+    constructor() {
+        super(
+            'LLM の利用枠(API の残高や利用上限)が足りないため中止しました。ページは公開していません。残高と利用上限を確認してから、もう一度実行してください。'
+        );
+    }
+}
 
 export interface PipelineOptions {
     readonly jobDirectory: string;
@@ -149,6 +176,7 @@ class Pipeline {
                 startedAt: first.at.toISOString(),
                 endedAt: last.at.toISOString(),
                 warnings: this.#warnings,
+                usage: await readJobUsage(this.#options.jobDirectory),
             },
         };
     }
@@ -426,6 +454,12 @@ class Pipeline {
                 prompt: 'このディレクトリの task.md を読み、そこに書かれた SKILL の手順に従って out.json を書いてください。',
                 web: spec.kind === 'research',
             });
+            const inspection = inspectRun(this.#options.agentKind, run.stdout);
+            await this.#recordRun(spec.kind, inspection.usage);
+            if (inspection.quotaExhausted) {
+                await rm(spec.directory, { recursive: true, force: true });
+                throw new AgentQuotaError();
+            }
             let problem = 'out.json が書かれていません';
             const output = await readJsonIfExists(
                 path.join(spec.directory, 'out.json')
@@ -454,6 +488,15 @@ class Pipeline {
         }
         await rm(spec.directory, { recursive: true, force: true });
         return null;
+    }
+
+    async #recordRun(kind: TaskKind, usage: RunUsage | null): Promise<void> {
+        await mkdir(this.#workDirectory, { recursive: true });
+        const entry: UsageEntry = { kind, usage };
+        await appendFile(
+            path.join(this.#workDirectory, USAGE_FILE),
+            `${JSON.stringify(entry)}\n`
+        );
     }
 
     async #prepareTask(
@@ -658,22 +701,85 @@ async function readJsonIfExists(file: string): Promise<unknown> {
     return JSON.parse(text) as unknown;
 }
 
-async function mapLimit<T, R>(
+interface UsageEntry {
+    readonly kind: TaskKind;
+    readonly usage: RunUsage | null;
+}
+
+/** ジョブで CLI を起動した記録を集計する。費用の報告が 1 件もなければ undefined。 */
+export async function readJobUsage(
+    jobDirectory: string
+): Promise<JobUsage | undefined> {
+    let text: string;
+    try {
+        text = await readFile(
+            path.join(jobDirectory, JOB_WORK_DIR, USAGE_FILE),
+            'utf8'
+        );
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            return undefined;
+        }
+        throw error;
+    }
+    const entries = text
+        .split('\n')
+        .filter((line) => line !== '')
+        .map((line) => JSON.parse(line) as UsageEntry);
+    const reported = entries.filter((entry) => entry.usage !== null);
+    if (reported.length === 0) return undefined;
+    const sum = (field: keyof RunUsage): number =>
+        reported.reduce((total, entry) => total + entry.usage![field], 0);
+    const costByKind: Record<string, number> = {};
+    for (const { kind, usage } of reported) {
+        costByKind[kind] = roundUsd((costByKind[kind] ?? 0) + usage!.costUsd);
+    }
+    return {
+        costUsd: roundUsd(sum('costUsd')),
+        costByKind,
+        runs: entries.length,
+        unreportedRuns: entries.length - reported.length,
+        inputTokens: sum('inputTokens'),
+        cacheWriteTokens: sum('cacheWriteTokens'),
+        cacheReadTokens: sum('cacheReadTokens'),
+        outputTokens: sum('outputTokens'),
+        webSearches: sum('webSearches'),
+    };
+}
+
+function roundUsd(value: number): number {
+    return Math.round(value * 1e6) / 1e6;
+}
+
+/**
+ * 同時に limit 個まで実行する。1 つが例外を投げたら新しいものは始めず、
+ * 動いているものが終わるのを待ってから失敗を返す。
+ */
+export async function mapLimit<T, R>(
     items: readonly T[],
     limit: number,
     task: (item: T) => Promise<R>
 ): Promise<R[]> {
     const results = new Array<R>(items.length);
     let next = 0;
+    let failed = false;
     const worker = async (): Promise<void> => {
-        while (next < items.length) {
+        while (next < items.length && !failed) {
             const index = next;
             next += 1;
-            results[index] = await task(items[index] as T);
+            try {
+                results[index] = await task(items[index] as T);
+            } catch (error) {
+                failed = true;
+                throw error;
+            }
         }
     };
-    await Promise.all(
+    const settled = await Promise.allSettled(
         Array.from({ length: Math.min(limit, items.length) }, worker)
     );
+    for (const outcome of settled) {
+        if (outcome.status === 'rejected') throw outcome.reason;
+    }
     return results;
 }

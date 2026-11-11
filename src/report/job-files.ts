@@ -36,6 +36,23 @@ export interface JobRequest {
     readonly createdAt: string;
 }
 
+/** 1 本のページの生成にかかった LLM の費用。 */
+export interface JobUsage {
+    /** CLI が定価で計算した推定額(USD)の合計。やり直した分も含む。 */
+    readonly costUsd: number;
+    /** タスクの種類ごとの内訳(USD)。 */
+    readonly costByKind: Readonly<Record<string, number>>;
+    /** CLI を起動した回数。 */
+    readonly runs: number;
+    /** 費用が分からなかった回数(時間切れなど)。0 でなければ costUsd は下限。 */
+    readonly unreportedRuns: number;
+    readonly inputTokens: number;
+    readonly cacheWriteTokens: number;
+    readonly cacheReadTokens: number;
+    readonly outputTokens: number;
+    readonly webSearches: number;
+}
+
 export interface JobSuccess {
     readonly status: 'ok';
     readonly title: string;
@@ -46,11 +63,13 @@ export interface JobSuccess {
     readonly endedAt: string;
     /** ページは作れたが一部を省いたことの記録(校正できなかった区間など)。 */
     readonly warnings: readonly string[];
+    readonly usage?: JobUsage | undefined;
 }
 
 export interface JobFailure {
     readonly status: 'failed';
     readonly error: string;
+    readonly usage?: JobUsage | undefined;
 }
 
 export type JobResult = JobSuccess | JobFailure;

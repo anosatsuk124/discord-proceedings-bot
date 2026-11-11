@@ -222,6 +222,94 @@ export function fetchedUrls(
     return recordsFetches(kind) ? claudeFetchedUrls(stdout) : null;
 }
 
+/** CLI を 1 回起動したときの費用とトークン数。 */
+export interface RunUsage {
+    /** CLI が定価で計算した推定額(USD)。 */
+    readonly costUsd: number;
+    readonly inputTokens: number;
+    readonly cacheWriteTokens: number;
+    readonly cacheReadTokens: number;
+    readonly outputTokens: number;
+    readonly webSearches: number;
+}
+
+export interface RunInspection {
+    /** 報告しない CLI や、結果が出る前に止まった実行では null。 */
+    readonly usage: RunUsage | null;
+    /** 残高切れや利用上限で、やり直しても進めない状態か。 */
+    readonly quotaExhausted: boolean;
+}
+
+/** CLI の出力から、費用と、利用枠が尽きて止まったかどうかを読み取る。 */
+export function inspectRun(kind: AgentKind, stdout: string): RunInspection {
+    return kind === 'claude'
+        ? inspectClaudeRun(stdout)
+        : { usage: null, quotaExhausted: false };
+}
+
+/**
+ * CLI 自身が出すエラーの文面。発言やモデルの出力に同じ語が含まれても誤判定しないよう、
+ * is_error の result イベントにだけ照合する。
+ */
+const QUOTA_ERROR =
+    /credit balance|you['’]ve hit your|reached your (?:specified )?(?:workspace )?api usage limits/i;
+
+interface ClaudeModelUsage {
+    readonly inputTokens?: number;
+    readonly outputTokens?: number;
+    readonly cacheReadInputTokens?: number;
+    readonly cacheCreationInputTokens?: number;
+    readonly webSearchRequests?: number;
+}
+
+interface ClaudeEvent {
+    readonly type?: string;
+    readonly error?: unknown;
+    readonly is_error?: unknown;
+    readonly result?: unknown;
+    readonly total_cost_usd?: unknown;
+    readonly modelUsage?: Readonly<Record<string, ClaudeModelUsage>>;
+}
+
+function inspectClaudeRun(stdout: string): RunInspection {
+    let result: ClaudeEvent | undefined;
+    let billingError = false;
+    for (const line of stdout.split('\n')) {
+        let event: ClaudeEvent | null;
+        try {
+            event = JSON.parse(line) as ClaudeEvent | null;
+        } catch {
+            continue;
+        }
+        if (event?.type === 'result') result = event;
+        else if (event?.type === 'assistant' && event.error === 'billing_error')
+            billingError = true;
+    }
+    return {
+        usage: claudeUsage(result),
+        quotaExhausted:
+            billingError ||
+            (result?.is_error === true &&
+                typeof result.result === 'string' &&
+                QUOTA_ERROR.test(result.result)),
+    };
+}
+
+function claudeUsage(result: ClaudeEvent | undefined): RunUsage | null {
+    if (typeof result?.total_cost_usd !== 'number') return null;
+    const models = Object.values(result.modelUsage ?? {});
+    const sum = (field: keyof ClaudeModelUsage): number =>
+        models.reduce((total, model) => total + (model[field] ?? 0), 0);
+    return {
+        costUsd: result.total_cost_usd,
+        inputTokens: sum('inputTokens'),
+        cacheWriteTokens: sum('cacheCreationInputTokens'),
+        cacheReadTokens: sum('cacheReadInputTokens'),
+        outputTokens: sum('outputTokens'),
+        webSearches: sum('webSearchRequests'),
+    };
+}
+
 interface StreamContent {
     readonly type?: string;
     readonly id?: string;
