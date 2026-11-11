@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import type { JobUsage } from './job-files.ts';
 import { writeJsonAtomic } from './shared.ts';
 
 /**
@@ -47,6 +48,8 @@ export interface ReportRecord {
     readonly startedAt?: string;
     readonly endedAt?: string;
     readonly warnings?: readonly string[];
+    /** 生成にかかった LLM の費用。CLI が報告しなければない。 */
+    readonly usage?: JobUsage | undefined;
     /** 公開したページの URL。 */
     readonly url?: string;
     /** push 済みで Actions の完了を待っているコミット。再起動後はここから続ける。 */

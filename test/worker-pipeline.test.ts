@@ -12,7 +12,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { JobRequest } from '../src/report/job-files.ts';
 import { assertSelfContained } from '../src/report-worker/compile.ts';
-import { runPipeline } from '../src/report-worker/pipeline.ts';
+import {
+    AgentQuotaError,
+    mapLimit,
+    runPipeline,
+} from '../src/report-worker/pipeline.ts';
 import type {
     AgentRun,
     AgentRunner,
@@ -232,6 +236,159 @@ describe('パイプライン', () => {
 
     afterEach(async () => {
         await rm(root, { recursive: true, force: true });
+    });
+
+    describe('利用枠と費用', () => {
+        const paid = (cost: number): string =>
+            JSON.stringify({
+                type: 'result',
+                is_error: false,
+                total_cost_usd: cost,
+                modelUsage: {
+                    'claude-sonnet-5-5': {
+                        inputTokens: 1,
+                        outputTokens: 2,
+                        cacheReadInputTokens: 3,
+                        cacheCreationInputTokens: 4,
+                        webSearchRequests: 0,
+                    },
+                },
+            });
+        const exhausted = JSON.stringify({
+            type: 'result',
+            is_error: true,
+            total_cost_usd: 0,
+            result: 'Credit balance is too low',
+        });
+
+        function runWith(runner: AgentRunner) {
+            return runPipeline({
+                jobDirectory,
+                request,
+                agentKind: 'claude',
+                runner,
+                concurrency: 1,
+                taskRoot,
+                research: {
+                    enabled: true,
+                    maxTopics: 5,
+                    isReachable: async () => true,
+                },
+                logger: { info() {}, warn() {} },
+            });
+        }
+
+        function charged(behaviour: FakeBehaviour = {}): AgentRunner {
+            const base = fakeRunner(behaviour, calls, snapshots);
+            return async (task) => {
+                const run = await base(task);
+                return { ...run, stdout: `${run.stdout}\n${paid(0.5)}` };
+            };
+        }
+
+        for (const [label, prefix] of [
+            ['校正', 'correct'],
+            ['調査', 'job1-research'],
+            ['議論マップ', 'map'],
+        ] as const) {
+            it(`${label}の途中で残高が尽きたら、ページを作らずに中止する`, async () => {
+                const base = charged();
+                let hits = 0;
+                const runner: AgentRunner = async (task) => {
+                    if (task.name.startsWith(prefix)) {
+                        hits += 1;
+                        return {
+                            stdout: exhausted,
+                            exitCode: 1,
+                            timedOut: false,
+                        };
+                    }
+                    return base(task);
+                };
+                await assert.rejects(runWith(runner), AgentQuotaError);
+                assert.equal(hits, 1); // やり直さない
+            });
+        }
+
+        it('ほかの失敗では、これまでどおりページを作る', async () => {
+            const output = await runWith(charged({ failCorrection: true }));
+            assert.match(output.result.warnings.join(), /校正できなかった/);
+        });
+
+        it('やり直した分も含めて費用を集計し、再開しても失わない', async () => {
+            const output = await runWith(
+                charged({ invalidFirstCorrection: true })
+            );
+            const expected = {
+                costUsd: 2.5,
+                costByKind: {
+                    outline: 0.5,
+                    research: 0.5,
+                    correct: 1,
+                    map: 0.5,
+                },
+                runs: 5,
+                unreportedRuns: 0,
+                inputTokens: 5,
+                cacheWriteTokens: 20,
+                cacheReadTokens: 15,
+                outputTokens: 10,
+                webSearches: 0,
+            };
+            assert.equal(calls.length, 5);
+            assert.deepEqual(output.result.usage, expected);
+
+            const resumed = await runWith(charged());
+            assert.equal(calls.length, 5); // 保存した結果を使い、LLM は呼ばない
+            assert.deepEqual(resumed.result.usage, expected);
+        });
+
+        it('費用が分からない実行があれば数を残す', async () => {
+            const base = charged();
+            const runner: AgentRunner = async (task) => {
+                const run = await base(task);
+                return task.name === 'map'
+                    ? { ...run, stdout: '', timedOut: true }
+                    : run;
+            };
+            const output = await runWith(runner);
+            assert.equal(output.result.usage?.runs, 4);
+            assert.equal(output.result.usage?.unreportedRuns, 1);
+            assert.equal(output.result.usage?.costUsd, 1.5);
+        });
+
+        it('費用の報告が 1 件もなければ記録しない', async () => {
+            const output = await run();
+            assert.equal(output.result.usage, undefined);
+        });
+    });
+
+    describe('同時実行', () => {
+        it('失敗したら新しいものは始めず、動いているものを待ってから失敗を返す', async () => {
+            const started: number[] = [];
+            const finished: number[] = [];
+            const failure = new Error('stop');
+            await assert.rejects(
+                mapLimit([1, 2, 3, 4], 2, async (item) => {
+                    started.push(item);
+                    await new Promise((resolve) =>
+                        setTimeout(resolve, item === 1 ? 1 : 20)
+                    );
+                    finished.push(item);
+                    if (item === 1) throw failure;
+                }),
+                failure
+            );
+            assert.deepEqual(started, [1, 2]);
+            assert.deepEqual(finished, [1, 2]);
+        });
+
+        it('失敗がなければすべて順番どおりに返す', async () => {
+            assert.deepEqual(
+                await mapLimit([1, 2, 3], 2, async (item) => item * 2),
+                [2, 4, 6]
+            );
+        });
     });
 
     it('本文を直接埋め込んだ静的な HTML を作る', async () => {

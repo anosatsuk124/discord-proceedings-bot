@@ -11,7 +11,7 @@ import {
 import { writeJsonAtomic } from '../report/shared.ts';
 import type { AgentKind } from './agent-cli.ts';
 import type { WorkerConfig } from './config.ts';
-import { runPipeline } from './pipeline.ts';
+import { readJobUsage, runPipeline } from './pipeline.ts';
 import { cliRunner } from './runner.ts';
 
 /** request.json があり、result.json がないジョブを古い順に返す。 */
@@ -110,7 +110,14 @@ export async function processJob(
         result = {
             status: 'failed',
             error: error instanceof Error ? error.message : String(error),
+            // 途中まででも費用はかかっている。読めなくても失敗の報告は止めない。
+            usage: await readJobUsage(directory).catch(() => undefined),
         };
+    }
+    if (result.usage !== undefined) {
+        console.info(
+            `job ${path.basename(directory)}: estimated cost $${result.usage.costUsd.toFixed(3)} (${result.usage.runs} run(s), ${result.status})`
+        );
     }
     // bot は result.json を見て動くので、最後に書く。
     await writeJsonAtomic(path.join(directory, JOB_RESULT_FILE), result);

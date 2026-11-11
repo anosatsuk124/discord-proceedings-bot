@@ -378,6 +378,7 @@ export class ReportCoordinator {
             return;
         }
         if (result.status === 'failed') {
+            await this.#update(progress, { usage: result.usage });
             await this.#fail(progress, result.error);
             return;
         }
@@ -397,6 +398,7 @@ export class ReportCoordinator {
             startedAt: result.startedAt,
             endedAt: result.endedAt,
             warnings: result.warnings,
+            usage: result.usage,
         });
         await rm(jobDirectory, { recursive: true, force: true });
     }
